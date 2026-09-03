@@ -244,9 +244,9 @@ export function SignalsSection({ data }) {
   return (
     <>
       <div className="section-h" style={{ marginTop: 0 }}>
-        Technographics — which GTM tech an account runs
+        Technographics — which tech an account runs
         {tech && <span className="muted" style={{ textTransform: 'none', letterSpacing: 0 }}>
-          {' '}· deterministic website + DNS scan · cached {tech.refresh_days} days
+          {' '}· deterministic website + DNS + portal-probe scan · cached {tech.refresh_days} days
           {!tech.available && <span style={{ color: BRAND.amber }}> · currently unavailable: {tech.reason}</span>}
         </span>}
       </div>

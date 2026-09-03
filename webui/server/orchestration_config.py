@@ -368,7 +368,12 @@ PLAYBOOK_PLAYS = {
 
 def _tech_signals_section(root):
     import tech_signals as T
-    selection = json.loads((root / "technographics" / "signatures" / "selection.marketing_sales.json").read_text())
+    # The ACTIVE selection (same resolution as tech_signals._Engine): env
+    # override, else the module default — selection.erp.json for Value Global.
+    sel_path = Path(os.environ.get("TECH_SELECTION_FILE") or T.DEFAULT_SELECTION)
+    if not sel_path.is_absolute():
+        sel_path = root / sel_path
+    selection = json.loads(sel_path.read_text())
     try:
         vendors_meta = json.loads((root / "technographics" / "signatures" / "vendors.json").read_text())
     except Exception:

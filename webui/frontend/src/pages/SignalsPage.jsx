@@ -5,7 +5,7 @@ import SignalDetail from '../components/SignalDetail.jsx'
 
 // Signal cache — per-company research reused for 90 days so a company is searched
 // once instead of once per contact / per re-run. Force-refresh re-searches one.
-// Tech = the technographic scan (website + DNS fingerprinting) stored alongside:
+// Tech = the technographic scan (website + DNS fingerprinting + ERP portal probes) stored alongside:
 // per-row Detect re-scans one company, "Detect missing" backfills the rest.
 // Hiring = the Prospeo job-postings scan (open roles + sales subset), same cache;
 // single-domain detect lives in the row drawer, "Detect hiring" backfills the rest.

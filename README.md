@@ -17,8 +17,10 @@ Repo: <https://github.com/ameyadeshmukh10/sdr-console>
    contacts per company, dedups against HubSpot, and creates them straight into the
    pipeline — no manual list building.
 2. **Research** — every account gets a researched recent signal (web search), a
-   **technographic scan** (which CRM / ad pixels / martech / salestech the company runs,
-   via deterministic DNS + website fingerprinting against a 7.5k-vendor catalogue), and a
+   **technographic scan** (configured for Value Global: which ERP suite the company runs
+   — Oracle E-Business Suite, Oracle Fusion Cloud ERP, PeopleSoft, JD Edwards — via
+   deterministic DNS + website fingerprinting plus ERP portal probes on named
+   subdomains), and a
    **hiring scan** (open roles, with a sales/GTM-role classifier). All three are cached
    per company domain for 90 days so a company is researched once, not once per contact.
 3. **Generate** — each contact is routed by job title to one of **4 persona agents**
