@@ -1,0 +1,199 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { api } from '../api.js'
+import { Stat, Spinner, ErrorBanner, Badge, num } from '../components/ui.jsx'
+import EnrollPanel from '../components/EnrollPanel.jsx'
+import GenerateJobPanel from '../components/GenerateJobPanel.jsx'
+import BatchJobPanel from '../components/BatchJobPanel.jsx'
+
+// Pipeline — live batch progress + UI-triggered copy generation (Anthropic API)
+// + the enrollment gate. Generation runs as a background job; the DB-backed
+// progress view and the per-contact job panel update live.
+const POLL_MS = 2500
+
+// Instruction-set variants to A/B test (must match the backend WRITE_RULES keys).
+const VARIANTS = [
+  { id: 'value-give', label: 'Value-give (baseline)', hint: 'Current: give + meeting ask each step, ~80-110 words' },
+  { id: 'earn', label: 'Earn-the-reply', hint: 'Shorter, question CTAs, meeting deferred to touch 3' },
+  { id: 'show', label: 'Show-the-product', hint: 'Earn + async "3 sample emails to your top accounts" offer' },
+]
+
+export default function PipelinePage() {
+  const [jobId, setJobId] = useState(null)
+  const [genError, setGenError] = useState(null)
+  const [prog, setProg] = useState(null)
+  const [error, setError] = useState(null)
+  const [auto, setAuto] = useState(true)
+  const [variant, setVariant] = useState('value-give')
+  const [splitMode, setSplitMode] = useState(false)
+  const [split, setSplit] = useState({ 'value-give': 34, earn: 33, show: 33 })
+  const [lastTick, setLastTick] = useState(null)
+  const timer = useRef(null)
+
+  const splitTotal = VARIANTS.reduce((s, v) => s + (Number(split[v.id]) || 0), 0)
+  const splitValid = splitTotal === 100
+
+  const poll = useCallback(async () => {
+    try {
+      const p = await api.progress()
+      setProg(p); setError(null); setLastTick(new Date())
+    } catch (e) { setError(e.message) }
+  }, [])
+
+  useEffect(() => { poll() }, [poll])
+  useEffect(() => {
+    if (!auto) { clearInterval(timer.current); return }
+    timer.current = setInterval(poll, POLL_MS)
+    return () => clearInterval(timer.current)
+  }, [auto, poll])
+
+  async function startGenerate(batchId) {
+    setGenError(null)
+    try {
+      const r = await api.generate(batchId, variant)
+      if (r.job_id) setJobId(r.job_id)
+      if (r.ok === false) setGenError(r.error || 'could not start job')
+    } catch (e) { setGenError(e.message) }
+  }
+
+  const bstat = prog?.batches_by_status || {}
+  const done = bstat.done || 0
+  const total = prog?.total_batches || 0
+  const inProgress = bstat.in_progress || 0
+  const pending = bstat.pending || 0
+  const pctDone = total ? Math.round((100 * done) / total) : 0
+  const cstat = prog?.contacts_by_status || {}
+
+  return (
+    <div>
+      <div className="row between">
+        <div>
+          <h1 className="page-title">Pipeline</h1>
+          <p className="page-sub">Live batch generation progress, then enroll the generated copy into the email campaign.</p>
+        </div>
+        <div className="row" style={{ gap: 12 }}>
+          <label className="row" style={{ gap: 6, fontSize: 13, color: 'var(--muted)' }}>
+            <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} style={{ width: 'auto' }} />
+            Auto-refresh
+          </label>
+          <button className="ghost sm" onClick={poll}>↻ Now</button>
+        </div>
+      </div>
+
+      <ErrorBanner error={error} />
+
+      {!prog ? <Spinner label="Loading…" /> : (
+        <>
+          <div className="panel feature" style={{ marginBottom: 20 }}>
+            <div className="row between" style={{ marginBottom: 10 }}>
+              <span className="section-h" style={{ margin: 0 }}>Batch progress</span>
+              <span className="muted" style={{ fontSize: 12 }}>
+                {auto ? <span className="row" style={{ gap: 6 }}><span className="spinner" />live</span> : 'paused'}
+                {lastTick && ` · updated ${lastTick.toLocaleTimeString()}`}
+              </span>
+            </div>
+            <div className="progress">
+              <div className="progress-bar" style={{ width: `${pctDone}%` }} />
+            </div>
+            <div className="row" style={{ gap: 18, marginTop: 12 }}>
+              <span><b>{num(done)}</b> / {num(total)} batches done ({pctDone}%)</span>
+              <span className="muted">{num(inProgress)} in progress · {num(pending)} pending</span>
+            </div>
+          </div>
+
+          <div className="grid stat-grid" style={{ marginBottom: 22 }}>
+            <Stat label="Pending" value={num(cstat.pending || 0)} sub="awaiting generation" />
+            <Stat label="Generated" value={num(cstat.generated || 0)} sub="ready to enroll" accent />
+            <Stat label="Enrolled" value={num(cstat.enrolled || 0)} tone="good" />
+            <Stat label="Skipped / failed" value={num((cstat.skipped || 0) + (cstat.failed || 0))} tone="warn" />
+          </div>
+
+          <div className="panel" style={{ marginBottom: 22 }}>
+            <div className="row between" style={{ marginBottom: 10 }}>
+              <span className="section-h" style={{ margin: 0 }}>Instruction set (A/B test)</span>
+              <div className="row" style={{ gap: 8 }}>
+                <button className={splitMode ? 'ghost' : ''} onClick={() => setSplitMode(false)} style={{ fontSize: 13 }}>Single variant</button>
+                <button className={splitMode ? '' : 'ghost'} onClick={() => setSplitMode(true)} style={{ fontSize: 13 }}>Split %</button>
+              </div>
+            </div>
+
+            {!splitMode ? (
+              <div className="toolbar" style={{ marginBottom: 0 }}>
+                <label className="field">Variant
+                  <select value={variant} onChange={(e) => setVariant(e.target.value)} style={{ minWidth: 230 }}>
+                    {VARIANTS.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+                  </select>
+                </label>
+                <span className="muted" style={{ alignSelf: 'center', maxWidth: 560, fontSize: 13 }}>
+                  {VARIANTS.find((v) => v.id === variant)?.hint}. Applies to both <b>Generate copy</b> and the <b>Batch API</b> below.
+                </span>
+              </div>
+            ) : (
+              <>
+                <div className="toolbar" style={{ marginBottom: 0 }}>
+                  {VARIANTS.map((v) => (
+                    <label key={v.id} className="field">{v.label}
+                      <input type="number" min="0" max="100" value={split[v.id]}
+                        onChange={(e) => setSplit((s) => ({ ...s, [v.id]: Number(e.target.value) }))}
+                        style={{ width: 90 }} />
+                    </label>
+                  ))}
+                  <span className="muted" style={{ alignSelf: 'center', fontSize: 13, color: splitValid ? 'var(--muted)' : 'var(--red)' }}>
+                    Total: <b>{splitTotal}%</b>{splitValid ? '' : ' — must equal 100'}
+                  </span>
+                </div>
+                <p className="muted" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
+                  Distributes the selected contacts across variants by these proportions when submitting to the <b>Batch API</b> below.
+                </p>
+              </>
+            )}
+          </div>
+
+          <ErrorBanner error={genError} />
+
+          {prog.active_batches.length > 0 ? (
+            <>
+              <h2 className="section-h">Active batches</h2>
+              <div className="panel" style={{ padding: 0, marginBottom: 24 }}>
+                <table>
+                  <thead><tr><th>Batch</th><th>Status</th><th>Size</th><th>Generated</th><th>Failed</th><th>Pending</th><th></th></tr></thead>
+                  <tbody>
+                    {prog.active_batches.map((b) => (
+                      <tr key={b.batch_id}>
+                        <td className="mono">#{b.batch_id}</td>
+                        <td><Badge kind="status" value={b.status === 'in_progress' ? 'generated' : 'pending'} /></td>
+                        <td>{b.size}</td>
+                        <td>{b.counts.generated || 0}</td>
+                        <td>{b.counts.failed || 0}</td>
+                        <td>{b.counts.pending || 0}</td>
+                        <td>
+                          {b.status === 'pending' && (
+                            <button className="sm" onClick={() => startGenerate(b.batch_id)} disabled={!!jobId}>
+                              Generate copy
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : (
+            <div className="banner info" style={{ marginBottom: 24 }}>
+              No active batches — all {num(total)} batches are done. Ingest a list (Use tab) or
+              <span className="mono"> reset-batch</span> one, then click <b>Generate copy</b> here to run the
+              AI SDR via the Anthropic API.
+            </div>
+          )}
+
+          {jobId && <GenerateJobPanel jobId={jobId} onDone={poll} />}
+
+          <BatchJobPanel pendingBatches={pending} variant={variant}
+            split={splitMode ? split : null} splitValid={splitValid} onChanged={poll} />
+
+          <EnrollPanel generatedReady={prog.generated_ready} onChanged={poll} />
+        </>
+      )}
+    </div>
+  )
+}
