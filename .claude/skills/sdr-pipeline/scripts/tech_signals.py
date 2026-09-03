@@ -1,20 +1,37 @@
 """Technographic detection runner — module + CLI.
 
-Detects the marketing/sales tech a company runs (DNS + static-website
-fingerprinting via the vendored `technographics/` package at the repo root) and
-stores the result on the `account_signals` row for that domain:
+Detects the tech a company runs (DNS + static-website fingerprinting + ERP
+portal probes via the vendored `technographics/` package at the repo root) and
+stores the result on the `account_signals` row for that domain. This console is
+configured for Value Global: the default selection (`selection.erp.json`) scopes
+detection to the four probe-enabled ERP suites — Oracle E-Business Suite,
+Oracle Fusion Cloud ERP, PeopleSoft, JD Edwards — and deliberately drops the
+template's marketing/sales coverage (point TECH_SELECTION_FILE at
+`selection.marketing_sales.json` to get it back).
 
-    tech_signals    "CRM: HubSpot | Ad Pixels: Meta Pixel | Martech: Segment | ..."
-                    (or the literal "No signals detected"; NULL only if the scan
-                    itself failed on BOTH channels)
+    tech_signals    "ERP: Oracle PeopleSoft" (bucketed line; or the literal
+                    "No signals detected"; NULL only if the scan itself failed
+                    on BOTH channels)
     tech_detail     JSON: structured detections + per-channel errors + timing
     tech_checked_at ISO-8601 Z; scans are reused for TECH_REFRESH_DAYS (90)
     tech_error      set only when the whole scan failed (fetch AND dns dead)
 
+ERP suites never show on the marketing site: they're found by the vendored
+probe-then-fetch step (`subdomain_prober.py`) — cheap static GETs against
+well-known portal paths on named subdomains (e.g. erp.<domain>/OA_HTML/AppsLogin),
+matching only that vendor's signature, with catch-all guards (4xx/5xx dropped;
+a match whose only evidence is the URL we constructed is discarded unless the
+server organically redirected off-site). TECH_PROBES=0 disables the step;
+TECH_PROBE_TIMEOUT (default 4.0s) bounds each probe GET. The probes use a
+stdlib urllib fetcher injected from this module (upstream's default fetcher
+needs httpx, which prod doesn't install).
+
 Scan JSON (CLI + detect_and_store) also carries a `playbook` field: the
 copy-facing classification of detections into ads / intent_abm / sequencing
-groups (PLAYBOOK_* sets below). generate_batch.py reads the same groups from
-stored tech_detail to steer emails 2-3; agents reuse the CLI field directly.
+groups (PLAYBOOK_* sets below) — kept from the template; under the ERP-only
+selection every group is empty and generation consumes the line as plain
+background context. generate_batch.py reads the same groups from stored
+tech_detail; agents reuse the CLI field directly.
 
 After a successful scan the formatted line is also PATCHed to the HubSpot
 company property `technographic_signals` (best-effort; TECH_HUBSPOT_WRITEBACK=0
@@ -40,14 +57,17 @@ are always DNS + static HTML.
 
 The bucket-mapping / confidence / formatting logic is ported from the
 technographic-signals repo's `src/detectors/category_map.py` and
-`src/orchestrator.py` (see technographics/VENDORED.md for provenance).
+`src/orchestrator.py`; the probe orchestration mirrors its
+`src/detectors/engine.py` (see technographics/VENDORED.md for provenance).
 """
 
 import argparse
+import asyncio
 import gzip
 import http.cookiejar
 import json
 import os
+import ssl
 import sys
 import threading
 import time
@@ -67,7 +87,7 @@ _load_dotenv()
 PROJECT_ROOT = Path(__file__).resolve().parents[4]  # scripts/ -> sdr-pipeline -> skills -> .claude -> project
 TECH_SRC = PROJECT_ROOT / "technographics" / "src"
 SIGNATURES_DIR = PROJECT_ROOT / "technographics" / "signatures"
-DEFAULT_SELECTION = SIGNATURES_DIR / "selection.marketing_sales.json"
+DEFAULT_SELECTION = SIGNATURES_DIR / "selection.erp.json"
 FIXTURES_DIR = PROJECT_ROOT / "technographics" / "tests" / "fixtures"
 
 TECH_PROPERTY = "technographic_signals"
@@ -165,6 +185,8 @@ CATEGORY_TO_BUCKET = {
     "customer_support": "salestech",
     "appointment_scheduling": "salestech",
     "sales_engagement": "salestech",
+    # ERP suites (found by the subdomain probe step, not the marketing site)
+    "erp": "erp",
 }
 
 VENDOR_BUCKET_OVERRIDE = {
@@ -267,6 +289,7 @@ _CATEGORY_DISPLAY = [
     ("ad_pixel", "Ad Pixels"),
     ("martech", "Martech"),
     ("salestech", "Salestech"),
+    ("erp", "ERP"),
 ]
 
 Hit = namedtuple("Hit", "name category confidence evidence")
@@ -336,6 +359,11 @@ class _Engine:
             for sig in self.library.dns_signatures.values()
             for sub in sig.subdomains_to_probe
         })
+        # Portal probes (ERP): vendors that declare BOTH subdomains_to_probe
+        # (DNS side) and probe_paths (web side) opt into probe-then-fetch.
+        from technographics.subdomain_prober import probe_specs
+        self.has_probe_specs = bool(
+            probe_specs(self.library.dns_signatures, self.library.web_signatures))
 
 
 def _engine():
@@ -456,12 +484,106 @@ def fetch_static(host, timeout=None):
     return page, fetch_error
 
 
+# ---- stdlib portal-probe fetcher --------------------------------------------
+# Port of subdomain_prober._default_fetch (httpx -> urllib, same semantics):
+# https then plain-http fallback, redirects followed, TLS UNVERIFIED (on-prem
+# portals routinely run self-signed certs; only the response shape is
+# fingerprinted), any 4xx/5xx dropped, cookie NAMES captured across the whole
+# redirect chain (the CookieJar processes every hop). Injected into
+# probe_subdomains() as its `fetcher` so the vendored default — which lazily
+# imports httpx — never runs; prod stays at zero new pip deps.
+_PROBE_MAX_BODY = 512_000  # chars; fingerprints sit in the first chunk of HTML
+
+
+def _probe_fetch(url, timeout):
+    """GET one probe URL -> PageData, or None on any transport failure or a
+    >=400 status (upstream drops those outright — a portal that errors is not
+    evidence). Probing is best-effort by design; never raises."""
+    _ensure_path()
+    from technographics.web_matcher import PageData
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=ctx),
+        urllib.request.HTTPCookieProcessor(jar))
+
+    for attempt_url in (url, url.replace("https://", "http://", 1)):
+        req = urllib.request.Request(attempt_url, headers={
+            "User-Agent": _UA,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Encoding": "gzip, deflate",
+        })
+        try:
+            resp = opener.open(req, timeout=timeout)
+        except urllib.error.HTTPError:
+            return None  # a real 4xx/5xx answer — never match against it
+        except Exception:  # noqa: BLE001 — NXDOMAIN, TLS, timeout: try plain http
+            continue
+        try:
+            raw = resp.read(3_000_000)
+            headers = {k.lower(): v for k, v in resp.headers.items()}
+            final_url = resp.geturl() or attempt_url
+            charset = resp.headers.get_content_charset() or "utf-8"
+        except Exception:  # noqa: BLE001
+            return None
+        finally:
+            try:
+                resp.close()
+            except Exception:  # noqa: BLE001
+                pass
+        html = _decode_body(raw, headers).decode(charset, "replace")[:_PROBE_MAX_BODY]
+        parser = _PageParser()
+        try:
+            parser.feed(html)
+            parser.close()
+        except Exception:  # noqa: BLE001 — keep whatever parsed before the choke
+            pass
+        return PageData(
+            final_url=final_url,
+            js_globals=[],
+            script_srcs=parser.script_srcs,
+            cookies={c.name: "" for c in jar},
+            headers=headers,
+            html=html,
+            meta_tags=parser.meta_tags,
+        )
+    return None
+
+
+def probe_domain(host, eng=None):
+    """Run the vendored probe-then-fetch step (ERP portals) with the stdlib
+    fetcher. Returns (detections, probe_error). An empty list with no error is
+    the normal case: no portal answered with that vendor's fingerprint."""
+    eng = eng or _engine()
+    if not eng.has_probe_specs:
+        return [], None
+    timeout = _env_float("TECH_PROBE_TIMEOUT", 4.0)
+
+    async def fetcher(u):
+        return await asyncio.to_thread(_probe_fetch, u, timeout)
+
+    try:
+        from technographics.subdomain_prober import probe_subdomains
+        dets = probe_subdomains(
+            host, eng.library.dns_signatures, eng.library.web_signatures,
+            eng.library.vendors, timeout=timeout, fetcher=fetcher)
+        return dets, None
+    except Exception as exc:  # noqa: BLE001 — probes must never block the scan
+        return [], f"{type(exc).__name__}: {exc}"
+
+
 # ---- detection ---------------------------------------------------------------
 def detect_domain(domain, rendered=False):
-    """Pure detection (no DB): fetch + DNS -> match -> fuse -> bucket/format.
-    Returns {formatted, detections, fetch_error, dns_error, error, duration_ms,
-    rendered}. `error` is set — and formatted is None — ONLY when both channels
-    failed: a network-dead run must never be stored as "No signals detected"."""
+    """Pure detection (no DB): fetch + DNS + portal probes -> match -> fuse ->
+    bucket/format. Returns {formatted, detections, fetch_error, dns_error,
+    probe_error, error, duration_ms, rendered}. `error` is set — and formatted
+    is None — ONLY when both primary channels (fetch AND dns) failed: a
+    network-dead run must never be stored as "No signals detected". Probes are
+    best-effort on top (upstream engine.py semantics); their detections carry
+    source="probe"."""
     ok, reason = tech_available()
     if not ok:
         raise RuntimeError(f"technographic detection unavailable: {reason}")
@@ -499,8 +621,12 @@ def detect_domain(domain, rendered=False):
     except Exception as exc:  # noqa: BLE001 — DNS is best-effort
         dns_error = f"{type(exc).__name__}: {exc}"
 
+    probe_dets, probe_error = [], None
+    if _flag("TECH_PROBES", True):
+        probe_dets, probe_error = probe_domain(host, eng)
+
     from technographics.fusion import fuse
-    fused = fuse(dns_dets, web_dets)
+    fused = fuse(dns_dets, [*web_dets, *probe_dets])
 
     detections, hits = [], []
     for det in fused:
@@ -522,12 +648,16 @@ def detect_domain(domain, rendered=False):
     # and must not be stored as a confident "No signals detected".
     if page is None and dns_error is None and dns_records == 0:
         dns_error = "no records (resolver unreachable or domain does not resolve)"
-    if page is None and (dns_error is not None and not dns_dets):
+    # A probe detection is positive evidence the network worked — it rescues a
+    # scan whose apex fetch + DNS both came up empty (marketing site down or
+    # unresolvable, ERP portal alive on a subdomain).
+    if page is None and (dns_error is not None and not dns_dets) and not probe_dets:
         error = f"fetch: {fetch_error or 'failed'}; dns: {dns_error}"
         formatted = None
 
     return {"formatted": formatted, "detections": detections, "fetch_error": fetch_error,
-            "dns_error": dns_error, "dns_records": dns_records, "error": error,
+            "dns_error": dns_error, "dns_records": dns_records,
+            "probe_error": probe_error, "error": error,
             "duration_ms": int((time.monotonic() - t0) * 1000), "rendered": bool(rendered)}
 
 
@@ -590,6 +720,7 @@ def detect_and_store(domain, company=None, force=False, hubspot=None, rendered=F
         "fetch_error": res["fetch_error"],
         "dns_error": res["dns_error"],
         "dns_records": res["dns_records"],
+        "probe_error": res["probe_error"],
         "selection": _engine().selection_name,
         "duration_ms": res["duration_ms"],
         "rendered": res["rendered"],
@@ -706,62 +837,118 @@ def backfill(domains=None, stale_days=None, limit=None, workers=4, force=False,
 
 # ---- offline self-test ---------------------------------------------------------
 def self_test():
-    """Match the vendored fixtures (no network, no dnspython, no DB): the web
-    fixture must yield Intercom + Segment, the DNS fixture Intercom + HubSpot,
-    and the formatted line must bucket them correctly. Exit code 0/1."""
+    """Offline check of the ERP configuration (no network, no dnspython, no
+    DB): the default selection must load exactly the four probe-enabled ERP
+    suites, each suite's fingerprints must match a synthetic portal response,
+    the probe guards must drop catch-all servers, and — the Value Global scope
+    rule — the template's marketing/sales fixtures must no longer match
+    anything. Exit code 0/1."""
+    os.environ.pop("TECH_SELECTION_FILE", None)  # test the shipped default
     _ensure_path()
     from technographics.dns_matcher import DNSRecords
-    from technographics.fusion import fuse
+    from technographics.subdomain_prober import probe_specs, probe_subdomains
     from technographics.web_matcher import PageData
 
     eng = _engine()
-    page = PageData(**json.loads((FIXTURES_DIR / "sample_page_data.json").read_text()))
-    records = DNSRecords(**json.loads((FIXTURES_DIR / "sample_dns_records.json").read_text()))
+    erp_ids = {"oracle_ebs", "oracle_fusion_cloud_erp", "peoplesoft", "jd_edwards"}
+    specs = probe_specs(eng.library.dns_signatures, eng.library.web_signatures)
 
-    web = eng.web_matcher.match(page)
-    dns = eng.dns_matcher.match(records)
-    fused = fuse(dns, web)
+    def page(final_url, html="", cookies=(), headers=None):
+        return PageData(final_url=final_url, js_globals=[], script_srcs=[],
+                        cookies={c: "" for c in cookies},
+                        headers=dict(headers or {}), html=html, meta_tags={})
+
+    def match_ids(p):
+        return {d.vendor_id for d in eng.web_matcher.match(p)}
+
+    # One synthetic portal response per suite, built from disjoint fingerprints.
+    ebs_ids = match_ids(page("https://ebs.acme.com/OA_HTML/AppsLogin",
+                             html='<img src="/OA_HTML/cabo/images/x.gif"> AppsLocalLogin'))
+    ps_ids = match_ids(page("https://hr.acme.com/",
+                            html='<a href="/psp/ps/signon.html">Sign in</a> ptStyle',
+                            cookies=("PS_TOKEN", "PS_LOGINLIST")))
+    jde_ids = match_ids(page("https://jde.acme.com/jde/E1Menu.maf",
+                             html="E1Menu.maf com.jdedwards.web jdeLoginTitle"))
+    fusion_ids = match_ids(page(
+        "https://xyz.fa.ocs.oraclecloud.com/fscmUI/faces/AtkHomePageWelcome",
+        html='<div id="AtkHomePageWelcome"></div>'))
+
+    # Probe orchestration guards, via an injected offline fetcher (the same
+    # seam tech_signals uses in prod for its stdlib fetcher).
+    fusion_redirect = page(
+        "https://fa-xyz.fa.ocs.oraclecloud.com/fscmUI/faces/AtkHomePageWelcome",
+        html="<html>loading</html>")
+    ps_portal = page("https://ps.acme.com/", html='<a href="/psc/ps/">portal</a>',
+                     cookies=("PS_TOKEN",))
+
+    async def fetch_acme(url):
+        if url == "https://erp.acme.com/":   # fusion probe -> organic off-site redirect
+            return fusion_redirect
+        if url == "https://ps.acme.com/":    # peoplesoft probe -> response evidence
+            return ps_portal
+        return None
+
+    acme = probe_subdomains("acme.com", eng.library.dns_signatures,
+                            eng.library.web_signatures, eng.library.vendors,
+                            fetcher=fetch_acme)
+    acme_ids = {d.vendor_id for d in acme}
+
+    async def fetch_catchall(url):  # SPA catch-all: 200s every path back at you
+        return page(url, html="<html><body>welcome</body></html>")
+
+    catchall = probe_subdomains("catchall.test", eng.library.dns_signatures,
+                                eng.library.web_signatures, eng.library.vendors,
+                                fetcher=fetch_catchall)
+
+    async def fetch_www(url):  # wildcard DNS funneling every subdomain to www
+        return page("https://www.catchall.test" + url.split(".test", 1)[1],
+                    html="<html><body>welcome</body></html>")
+
+    www_funnel = probe_subdomains("catchall.test", eng.library.dns_signatures,
+                                  eng.library.web_signatures, eng.library.vendors,
+                                  fetcher=fetch_www)
+
+    # The template's marketing-stack fixtures (Intercom/Segment page + HubSpot
+    # DNS records) must now be out of scope: Value Global detects ERP only.
+    fx_page = PageData(**json.loads((FIXTURES_DIR / "sample_page_data.json").read_text()))
+    fx_records = DNSRecords(**json.loads((FIXTURES_DIR / "sample_dns_records.json").read_text()))
+    fx_web = eng.web_matcher.match(fx_page)
+    fx_dns = eng.dns_matcher.match(fx_records)
+
     hits = []
-    for det in fused:
+    for det in acme:
         bucket = bucket_for(det.vendor_id, det.category)
         if bucket:
             hits.append(Hit(det.vendor_name, bucket, confidence_bucket(det.confidence), []))
     formatted = format_signals(filter_low_confidence(hits))
-
-    web_ids = {d.vendor_id for d in web}
-    dns_ids = {d.vendor_id for d in dns}
-
-    # playbook classification: the fixture stack (Intercom/Segment/HubSpot) is
-    # all background, and a synthetic detections list must split into the three
-    # copy groups with GTM excluded and chat tools ignored.
-    fixture_dets = [{"vendor_id": det.vendor_id, "vendor_name": det.vendor_name,
-                     "bucket": bucket_for(det.vendor_id, det.category),
-                     "confidence": det.confidence} for det in fused]
-    fixture_pb = playbook_groups(fixture_dets)
-    synth = [{"vendor_id": "outreach", "vendor_name": "Outreach", "bucket": "salestech", "confidence": 0.9},
-             {"vendor_id": "6sense", "vendor_name": "6sense", "bucket": "salestech", "confidence": 0.9},
-             {"vendor_id": "facebook_pixel", "vendor_name": "Meta Pixel", "bucket": "ad_pixel", "confidence": 0.9},
-             {"vendor_id": "google_tag_manager", "vendor_name": "Google Tag Manager", "bucket": "ad_pixel", "confidence": 0.9},
-             {"vendor_id": "hubspot", "vendor_name": "HubSpot", "bucket": "crm", "confidence": 0.9},
-             {"vendor_id": "qualified", "vendor_name": "Qualified", "bucket": "salestech", "confidence": 0.9},
-             {"vendor_id": "salesloft", "vendor_name": "Salesloft", "bucket": "salestech", "confidence": 0.3}]
-    synth_pb = playbook_groups(synth)
-    detail_pb = playbook_from_detail(json.dumps({"detections": synth}))
+    pb = playbook_groups([{"vendor_id": d.vendor_id, "vendor_name": d.vendor_name,
+                           "bucket": bucket_for(d.vendor_id, d.category),
+                           "confidence": d.confidence} for d in acme])
 
     checks = [
-        ("web detects intercom", "intercom" in web_ids),
-        ("web detects segment", "segment" in web_ids),
-        ("dns detects intercom", "intercom" in dns_ids),
-        ("dns detects hubspot", "hubspot" in dns_ids),
-        ("HubSpot lands in CRM bucket", "CRM:" in formatted and "HubSpot" in formatted),
-        ("Segment lands in Martech bucket", "Martech:" in formatted and "Segment" in formatted),
-        ("Intercom lands in Salestech bucket", "Salestech:" in formatted and "Intercom" in formatted),
-        ("fixture stack is all-background", fixture_pb == {"ads": [], "intent_abm": [], "sequencing": []}),
-        ("outreach classifies as sequencing", synth_pb["sequencing"] == ["Outreach"]),
-        ("6sense classifies as intent_abm", synth_pb["intent_abm"] == ["6sense"]),
-        ("facebook_pixel classifies as ads, GTM excluded", synth_pb["ads"] == ["Meta Pixel"]),
-        ("uncorroborated low-confidence detection dropped", "Salesloft" not in synth_pb["sequencing"]),
-        ("playbook_from_detail round-trips", detail_pb == synth_pb),
+        ("default selection is the four ERP suites", set(eng.library.vendors) == erp_ids),
+        ("selection file is selection.erp.json", eng.selection_name == "selection.erp.json"),
+        ("all four suites are probe-enabled", set(specs) == erp_ids),
+        ("EBS page fingerprint matches", "oracle_ebs" in ebs_ids),
+        ("PeopleSoft cookies/html match", "peoplesoft" in ps_ids),
+        ("JD Edwards page fingerprint matches", "jd_edwards" in jde_ids),
+        ("Fusion pod URL + page match", "oracle_fusion_cloud_erp" in fusion_ids),
+        ("probe finds Fusion via organic off-site redirect",
+         "oracle_fusion_cloud_erp" in acme_ids),
+        ("probe finds PeopleSoft via response evidence", "peoplesoft" in acme_ids),
+        ("no cross-vendor shadow hits on acme",
+         acme_ids == {"oracle_fusion_cloud_erp", "peoplesoft"}),
+        ("probe detections carry source=probe",
+         bool(acme) and all(d.source == "probe" for d in acme)),
+        ("catch-all server yields nothing", not catchall),
+        ("www-funnel redirect yields nothing", not www_funnel),
+        ("marketing fixture page out of scope (0 web matches)", not fx_web),
+        ("marketing fixture DNS out of scope (0 dns matches)", not fx_dns),
+        ("ERP hits land in the ERP bucket",
+         formatted == "ERP: Oracle Fusion Cloud ERP, Oracle PeopleSoft"),
+        ("bucket_for maps the erp category", bucket_for("peoplesoft", "erp") == "erp"),
+        ("ERP stack is background-only for copy",
+         pb == {"ads": [], "intent_abm": [], "sequencing": []}),
         ("playbook_from_detail None on legacy rows",
          playbook_from_detail(None) is None and playbook_from_detail("not json") is None),
     ]
@@ -770,7 +957,8 @@ def self_test():
         log(f"{'PASS' if passed else 'FAIL'}  {name}")
     log(f"formatted: {formatted}")
     print(json.dumps({"ok": not failed, "failed": failed, "formatted": formatted,
-                      "web_detections": len(web), "dns_detections": len(dns),
+                      "probe_detections": len(acme),
+                      "probe_vendors": sorted(specs),
                       "vendors_loaded": len(eng.library.vendors)}))
     return 0 if not failed else 1
 

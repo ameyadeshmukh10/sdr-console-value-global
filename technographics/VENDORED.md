@@ -6,7 +6,10 @@ Wappalyzer-derived signature catalogue; MIT / catalogue data GPLv3 — see
 `signatures/master/NOTICE.md`).
 
 - **Source repo:** https://github.com/ameyadeshmukh10/technographic-signals
-- **Vendored commit:** `6acbfde4af97fff55ce034542711319e5555138d` (2026-07)
+- **Vendored commit:** `34805af1c0a27ffbe92b474c38886f91c53dd230` (2026-09 — adds the
+  ERP portal-probe pipeline: `subdomain_prober.py`, the four ERP vendor signatures
+  (Oracle EBS / Oracle Fusion Cloud ERP / PeopleSoft / JD Edwards), the `erp`
+  category, and `selection.erp.json` — this console's default selection)
 - **What was copied (unmodified):** `technographics/src/technographics/*.py` + `py.typed`,
   `technographics/signatures/**` (curated + full master catalogue + selection files),
   and two test fixtures under `tests/fixtures/` (used by
@@ -33,5 +36,9 @@ Then update the commit SHA above and re-run
   imported by `dns_collector.py`). All imports of this package MUST stay lazy so the
   web server boots without it.
 - **Optional, never installed in the Railway image:** `click` (only `cli.py`, which
-  nothing imports) and `playwright` (only `web_collector.py`, lazy import — used by
-  `tech_signals.py --rendered` in Claude sessions where Chromium is preinstalled).
+  nothing imports), `playwright` (only `web_collector.py`, lazy import — used by
+  `tech_signals.py --rendered` in Claude sessions where Chromium is preinstalled),
+  and `httpx` (only `subdomain_prober.py`'s DEFAULT fetcher, lazy import —
+  `tech_signals.py` never triggers it: it injects a stdlib-urllib async `fetcher`
+  into `probe_subdomains()`, so ERP portal probes run in prod with zero new pip
+  deps).

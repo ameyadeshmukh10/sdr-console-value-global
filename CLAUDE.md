@@ -93,19 +93,30 @@ Nightly job answering "which HubSpot deals did the AI SDR create, and what are t
   `hs_timestamp GT` filter (do the same in any new search-based code). `amount` is
   portal-currency, assumed single-currency (USD formatting).
 
-## Technographic detection (added 2026-07)
+## Technographic detection (added 2026-07; ERP reconfiguration 2026-09)
 
-Deterministic scan of which GTM tech an account runs (CRM / ad pixels / martech /
-salestech) — no LLM, no third-party API.
+Deterministic scan of which tech an account runs — no LLM, no third-party API.
+**This console is configured for Value Global: it detects ONLY the four probe-enabled
+ERP suites** (Oracle E-Business Suite, Oracle Fusion Cloud ERP, PeopleSoft, JD Edwards).
+The template's marketing/sales coverage (CRM / ad pixels / martech / salestech) is out
+of scope here — the catalogue still carries it, restore via `TECH_SELECTION_FILE`.
 
 - **Engine:** vendored at root `technographics/` (from the `technographic-signals` repo —
   provenance + re-sync in `technographics/VENDORED.md`). DNS fingerprinting (dnspython,
   resolvers 1.1.1.1/8.8.8.8: MX/TXT/NS/A/SOA + CNAME subdomain probes) + static-HTML
-  fingerprinting, matched against a Wappalyzer-derived catalogue (7.5k vendors), scoped by
-  `TECH_SELECTION_FILE` (default: curated ~65 marketing/sales vendors).
-- **Runner:** `.claude/skills/sdr-pipeline/scripts/tech_signals.py` (module + CLI). Fetcher
-  is stdlib urllib (NO requests/bs4); **NO Playwright in the Railway image** — `--rendered`
-  exists for Claude sessions only (Chromium preinstalled there).
+  fingerprinting + **ERP portal probes** (`subdomain_prober.py`: ERP suites never appear
+  on the marketing site, so vendors declaring `subdomains_to_probe` + `probe_paths` get
+  cheap static GETs at `https://<sub>.<domain><path>`, e.g. `erp.acme.com/OA_HTML/
+  AppsLogin`, matched against ONLY that vendor's signature), all against a
+  Wappalyzer-derived catalogue (7.5k vendors), scoped by `TECH_SELECTION_FILE`
+  (default: `selection.erp.json` — the 4 ERP suites).
+- **Runner:** `.claude/skills/sdr-pipeline/scripts/tech_signals.py` (module + CLI). Both
+  fetchers are stdlib urllib (NO requests/bs4/httpx — the probe step injects a urllib
+  `fetcher` into `probe_subdomains()` so the vendored default, which lazily imports
+  httpx, never runs); **NO Playwright in the Railway image** — `--rendered` exists for
+  Claude sessions only (Chromium preinstalled there). Probe knobs: `TECH_PROBES=0`
+  disables the step, `TECH_PROBE_TIMEOUT` (default 4.0 s) bounds each GET; budget is 8
+  probes/vendor path-major, ≤ ~27 GETs per scan at concurrency 8.
 - **When it runs:** (1) inline in `generate_batch.py` on a research cache miss (under the
   per-domain lock, before copy is written) and after a UI signal refresh; (2) Signals view
   per-row "Detect" + bulk "Detect missing" (`POST /api/signals/tech/detect`,
@@ -113,26 +124,31 @@ salestech) — no LLM, no third-party API.
   fire-and-forget tail after a Message-Batches job completes; (4) `build_play.py` scans the
   prospect pre-research and the play TARGET post-research (appended as a
   "6c-verified" block in research.md).
-- **Storage:** `account_signals.tech_signals` (formatted line, or the literal
-  `"No signals detected"`; NULL = scan itself failed), `tech_detail` (detections JSON),
-  `tech_checked_at` (reused for `TECH_REFRESH_DAYS`, default 90), `tech_error`.
+- **Storage:** `account_signals.tech_signals` (formatted line, e.g. `"ERP: Oracle
+  PeopleSoft"`, or the literal `"No signals detected"`; NULL = scan itself failed),
+  `tech_detail` (detections JSON — probe hits carry `source:"probe"`; also
+  `probe_error`), `tech_checked_at` (reused for `TECH_REFRESH_DAYS`, default 90),
+  `tech_error`.
 - **Consumers:** generation prompts get the line as background context (reference ONE
-  relevant tool max, never list the stack; chat/scheduling tools — Qualified, Drift,
-  Intercom, Chili Piper, Calendly — are NEVER mentioned) plus **playbook plays** classified
-  from `tech_detail` by `tech_signals.playbook_groups()` (`PLAYBOOK_*` sets; also in the
-  scan CLI/API JSON as `playbook`): sequencing tools (Outreach/Salesloft/Apollo) → EMAIL 2
-  no-disruption angle (own email+LinkedIn infra, 2-5x on top of the run rate) + run-rate
-  CTA; intent/ABM tools (name ONE) or ad pixels (generic, never name pixels) → EMAIL 3
-  Memgraph signal-activation story + signal-mapping CTA. `_cached_tech()` returns
-  `(line, playbook)`; legacy rows without parseable detail degrade to line-only.
-  Persona/batch-runner agents carry matching instructions; HubSpot write-back PATCHes the
+  relevant tool max, never list the stack). The template's **playbook plays**
+  (`playbook_groups()` / `PLAYBOOK_*` sets, `_cached_tech()` → `(line, playbook)`,
+  sequencing → EMAIL 2, intent/ABM or ads → EMAIL 3) are still wired end-to-end but
+  **never fire under the ERP-only selection** — all groups come back empty and the ERP
+  line rides along as plain background. HubSpot write-back PATCHes the
   `technographic_signals` company property (best-effort — company matched by `domain`;
   `TECH_HUBSPOT_WRITEBACK=0` kills it; needs company read/write + schema scopes on the
   token, otherwise it logs and moves on).
 - **Gotchas:** every import of `tech_signals`/dnspython must stay lazy (boot rule above).
-  A scan only counts as failed when BOTH channels died (fetch error AND zero DNS records) —
-  never store a network-dead run as "No signals detected". `--self-test` runs offline
-  against vendored fixtures (works without dnspython/network).
+  A scan only counts as failed when BOTH primary channels died (fetch error AND zero DNS
+  records) AND no probe detection rescued it — never store a network-dead run as
+  "No signals detected". Probe false-positive guards (in the vendored prober — don't
+  re-implement): 4xx/5xx responses dropped; a match whose only evidence is the probe URL
+  we constructed is discarded unless the server organically redirected OFF the probed
+  site (e.g. `erp.bk.rw` → `*.fa.ocs.oraclecloud.com` = genuine Fusion evidence;
+  a bounce back to apex/www is not). Probe TLS is deliberately unverified (on-prem
+  portals run self-signed certs). `--self-test` runs offline (works without
+  dnspython/network) and asserts the ERP config: 4 vendors, probe specs, per-suite
+  fingerprints, catch-all guards, and that the marketing fixtures no longer match.
 
 ## Hiring signals (added 2026-07)
 

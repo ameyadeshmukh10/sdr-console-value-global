@@ -155,15 +155,21 @@ Results feed the "Deals created by AI SDR" / "Total pipeline" tiles on the Analy
 
 ## 6. Technographic signals (which tech an account runs)
 
-Deterministic website + DNS scan (no LLM, no API keys — vendored `technographics/`
-engine) producing a line like `CRM: HubSpot | Ad Pixels: Meta Pixel | Martech: Segment`.
+Deterministic website + DNS scan plus **ERP portal probes** (no LLM, no API keys —
+vendored `technographics/` engine) producing a line like `ERP: Oracle PeopleSoft`.
+This console's default selection (`selection.erp.json`) detects ONLY the four
+probe-enabled ERP suites — Oracle E-Business Suite, Oracle Fusion Cloud ERP,
+PeopleSoft, JD Edwards; the template's marketing/sales coverage is out of scope for
+Value Global (restore it via `TECH_SELECTION_FILE`). ERP suites never appear on the
+marketing site, so the engine issues cheap static GETs against well-known portal
+paths on named subdomains (e.g. `erp.<domain>/OA_HTML/AppsLogin`), with catch-all
+false-positive guards (`TECH_PROBES=0` disables; `TECH_PROBE_TIMEOUT` default 4s).
 Runs automatically with account research and after batch generation; results live on the
 Signals view (Tech column, per-row **⌁ Detect**, bulk **Detect missing**) and are written
 to the HubSpot company property `technographic_signals` (disable: `TECH_HUBSPOT_WRITEBACK=0`).
-Copy generation also acts on the detections via playbook groups: sequencing tools
-(Outreach/Salesloft/Apollo) steer **email 2** (no-disruption angle + run-rate CTA), and
-intent/ABM tools or ad pixels steer **email 3** (Memgraph signal-activation story +
-signal-mapping CTA); chat/scheduling tools are never mentioned in copy. Manual runs:
+The copy playbook groups from the template (sequencing → email 2, intent/ABM or ad
+pixels → email 3) remain wired but never fire under the ERP-only selection — the ERP
+line reaches generation as background context. Manual runs:
 
 ```bash
 P=.claude/skills/sdr-pipeline/scripts
