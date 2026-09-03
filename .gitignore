@@ -1,0 +1,30 @@
+# Secrets — never commit
+.env
+# Clay OAuth tokens (access + refresh) live here:
+data/outreach/clay_oauth.json
+# Transient Clay sourcing job candidate files:
+data/outreach/source-jobs/
+# SLA rules + pull history (runtime state on the volume)
+data/outreach/slas.json
+data/outreach/pull_history.json
+# Autosync health status (runtime state; written by the server on every sync tick)
+data/interested-replies/.autosync_status.json
+
+# Transient SQLite WAL/SHM sidecar files (the .db itself IS committed)
+*.db-wal
+*.db-shm
+
+# Python
+__pycache__/
+*.pyc
+
+# Node / build output
+node_modules/
+dist/
+
+# OS
+.DS_Store
+deck-renderer/export-deck-bites/
+deck-renderer/.deck.lock
+# Signal plays are runtime artifacts (built per lead, live on the volume)
+data/signal-plays/
