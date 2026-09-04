@@ -7,6 +7,9 @@ data/outreach/source-jobs/
 # SLA rules + pull history (runtime state on the volume)
 data/outreach/slas.json
 data/outreach/pull_history.json
+# CSV audience uploads (registry + the raw uploaded files; runtime state on the volume)
+data/outreach/csv_audiences.json
+data/outreach/csv-uploads/
 # Autosync health status (runtime state; written by the server on every sync tick)
 data/interested-replies/.autosync_status.json
 

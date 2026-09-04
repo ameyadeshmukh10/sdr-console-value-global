@@ -52,7 +52,11 @@ def format_note(asset):
 
 
 def note_update(contact_id, asset):
-    """Build one batch_update input, or None when there is nothing to write."""
+    """Build one batch_update input, or None when there is nothing to write.
+    Synthetic ids (csv-* audience uploads, clay-* dry builds) are not HubSpot
+    contacts — skip them instead of 4xx-failing a whole batch chunk."""
+    if not str(contact_id).isdigit():
+        return None
     note = format_note(asset)
     if not note:
         return None

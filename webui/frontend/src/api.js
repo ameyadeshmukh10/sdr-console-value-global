@@ -94,6 +94,11 @@ export const api = {
     return get('/api/hubspot/lists?' + p.toString())
   },
   pullHistory: () => get('/api/pull/history'),
+  // CSV audiences — Use view CSV upload (named contact uploads → pipeline batches)
+  audiences: () => get('/api/audiences'),
+  audienceDetail: (id) => get('/api/audiences/' + encodeURIComponent(id)),
+  uploadAudience: (name, filename, csv) => post('/api/audiences/upload', { name, filename, csv }),
+  renameAudience: (id, name) => post('/api/audiences/' + encodeURIComponent(id) + '/rename', { name }),
   // SLAs — automatic enrollment rules (Use view → Create SLA)
   slas: () => get('/api/slas'),
   saveSla: (sla) => post('/api/slas', sla),                               // {id?} → create or update
