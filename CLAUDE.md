@@ -320,6 +320,46 @@ by the AI SDR again — they booked a meeting, became an opportunity, etc.
   FilterRow operators/values by type; enum options are UI-only and re-fetched on edit) →
   confirm) mounted below it. Stats + pending batches live on the Pipeline tab.
 
+## CSV audiences (added 2026-09)
+
+Third way to feed the pipeline from the Use view (next to a CRM list and SLAs): upload a
+contact CSV, name it, and it lands as a named **audience** of pipeline batches.
+
+- **Runner:** `.claude/skills/sdr-pipeline/scripts/csv_audience.py` (stdlib-only; module +
+  CLI `ingest --file … --name … [--id aud-<hex>] [--by] [--batch-size 25] [--dry-run]`,
+  offline `--self-test`). Parses flexible header spellings (first/last name, job title,
+  email, LinkedIn URL, country, company name/website/industry/employees; comma/semicolon/
+  tab + BOM handled), requires a valid email per row, dedups in-file and against
+  pipeline.db by email, assigns personas via `buyer_group.persona_for_title` — an
+  **unmatched title defaults to `sales-leadership`** (`persona_defaulted` count) instead of
+  being dropped: a hand-picked upload is trusted, so no ICP/geo filters apply (unlike
+  `hubspot_pull.py`). Inserts via `batch_db.upsert_contacts` + `assign_batches` (same
+  idempotent `retry_locked` shape as `sdr_batches init`), prints a JSON summary as the
+  LAST stdout line.
+- **Synthetic ids (load-bearing):** contacts get `csv-<suffix>-<n>` ids — these are NOT
+  HubSpot ids. Everything HubSpot-id-keyed skips or tolerates them by design:
+  `signal_notes.note_update` returns None for non-numeric ids (never 4xx-poisons a batch
+  chunk), `unenrollment_check.suppressed_set` already filters to digits, activity sync
+  resolves by email, `heyreach_account_for` hashes non-numeric ids. Enrollment (Bison by
+  email, HeyReach by LinkedIn URL) and generation work unchanged. Live status joins back
+  to an audience by id prefix.
+- **Domain preference:** rows carry `domain` from the company website (falls back to the
+  email domain in `upsert_contacts`), so signal research / tech / hiring scans hit the
+  company site even for personal-mailbox contacts. (`upsert_contacts` now honors a
+  caller-provided non-empty `domain` for any caller.)
+- **Store:** registry `data/outreach/csv_audiences.json` + raw uploads under
+  `data/outreach/csv-uploads/<audience_id>.csv` (both gitignored, live on the volume).
+  The web server is the registry's single writer (`record_audience`/`rename_audience`
+  under `CSV_AUD_LOCK`, atomic replace) — the script only writes the DB. Extra CSV
+  columns (country/industry/employees) aren't stored in the DB; the kept raw CSV is the
+  provenance.
+- **Endpoints:** `POST /api/audiences/upload` `{name, filename, csv}` (CSV as a JSON
+  string field; 10 MB cap; takes `INGEST_LOCK` → 409 while a pull/SLA runs),
+  `GET /api/audiences` (registry + live per-status counts from the read-only DB),
+  `GET /api/audiences/<id>` (audience + its contacts), `POST /api/audiences/<id>/rename`.
+  UI: Use view "CSV Upload" panel (file + name → summary banner; audiences table with
+  status chips, inline rename, expandable contact list).
+
 ## Background jobs (daemon threads started in `app.py main()`)
 
 1. `_activity_autosync_loop` — hourly: logs new email/LinkedIn activity to HubSpot.

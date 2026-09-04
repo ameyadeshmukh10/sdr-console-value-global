@@ -75,6 +75,16 @@ python3 $P/sdr_batches.py notes-backfill              # LIVE one-time backfill o
 **Contact status:** `pending → generated → enrolled` (or `failed` with the lint reason).
 Re-running only picks up unfinished work.
 
+**CSV audiences** — instead of (a), a contact CSV can feed the batch DB directly (the
+console's Use view does this via `POST /api/audiences/upload`):
+```bash
+python3 $P/csv_audience.py ingest --file contacts.csv --name "Q3 event leads" --dry-run
+python3 $P/csv_audience.py ingest --file contacts.csv --name "Q3 event leads"   # LIVE
+python3 $P/csv_audience.py --self-test                # offline parser/mapping checks
+```
+Contacts get synthetic `csv-…` ids (not HubSpot ids — HubSpot write-backs skip them);
+see CLAUDE.md "CSV audiences".
+
 ---
 
 ## 2. Single-shot / file-based outbound (no DB)

@@ -15,6 +15,10 @@ Endpoints (all under /api, all JSON):
   GET  /api/outreach?...           paginated/filtered outreach index + facets
   GET  /api/outreach/<contact_id>  full generated copy for one contact
   POST /api/ingest {list_id}       run hubspot_pull.py + sdr_batches.py init
+  POST /api/audiences/upload       {name, filename, csv} → csv_audience.py ingest
+  GET  /api/audiences              CSV audiences + live per-status counts
+  GET  /api/audiences/<id>         one audience + its contacts (from the DB)
+  POST /api/audiences/<id>/rename  {name}
   POST /api/reindex                rebuild the in-memory outreach index
   GET  /api/slas                   SLAs (automatic enrollment rules) + options
   POST /api/slas                   create / update an SLA ({id} present = update)
@@ -96,6 +100,10 @@ LI_REVIEW_QUEUE = DATA / "interested-replies" / "li_review_queue.json"
 BATCH_JOBS_DIR = DATA / "outreach" / "batch-jobs"
 SLA_RUN = SCRIPTS / "sdr-pipeline" / "scripts" / "sla_run.py"
 PULL_HISTORY_PATH = DATA / "outreach" / "pull_history.json"
+CSV_AUDIENCE = SCRIPTS / "sdr-pipeline" / "scripts" / "csv_audience.py"
+CSV_AUDIENCES_PATH = DATA / "outreach" / "csv_audiences.json"
+CSV_UPLOADS_DIR = DATA / "outreach" / "csv-uploads"
+MAX_CSV_UPLOAD = 10 * 1024 * 1024  # 10 MB cap on an uploaded audience CSV
 
 # In-process pipeline-DB access for the HeyReach webhook path. The server's own
 # db_connect() is read-only (mode=ro); persisting webhook events needs writes, so that
@@ -783,6 +791,142 @@ def record_pull(list_id, *, source="manual", by=None, pull_stdout=""):
         d["lists"][str(list_id)] = row
         _write_json_atomic(PULL_HISTORY_PATH, d)
     return d["lists"][str(list_id)]
+
+
+# ----------------------------------------------------------------------------
+# CSV audiences — named contact uploads from the Use view. The heavy lifting
+# (parse, dedup, persona, DB insert + batching) shells out to csv_audience.py
+# (the server's DB handle is read-only); the registry below is server-owned
+# (single writer, like pull_history.json) and lives on the volume. Contacts get
+# synthetic ids `csv-<suffix>-<n>`, so live status counts join back to an
+# audience by prefix, and HubSpot write-backs skip them by design.
+# ----------------------------------------------------------------------------
+CSV_AUD_LOCK = threading.Lock()
+
+
+def csv_audiences():
+    d = _read_json(CSV_AUDIENCES_PATH) or {}
+    auds = d.get("audiences")
+    return auds if isinstance(auds, list) else []
+
+
+def record_audience(rec):
+    with CSV_AUD_LOCK:
+        auds = [a for a in csv_audiences() if a.get("id") != rec.get("id")]
+        auds.insert(0, rec)  # newest first
+        _write_json_atomic(CSV_AUDIENCES_PATH, {"audiences": auds})
+    return rec
+
+
+def rename_audience(audience_id, name):
+    with CSV_AUD_LOCK:
+        auds = csv_audiences()
+        for a in auds:
+            if a.get("id") == audience_id:
+                a["name"] = name
+                _write_json_atomic(CSV_AUDIENCES_PATH, {"audiences": auds})
+                return a
+    return None
+
+
+def _audience_status_counts():
+    """Live per-audience status rollup: one read-only query over all csv-*
+    contacts, grouped by their `csv-<suffix>-` prefix. Degrades to {}."""
+    out = {}
+    try:
+        with db_connect() as conn:
+            for r in conn.execute(
+                    "SELECT contact_id, status FROM contacts WHERE contact_id LIKE 'csv-%'"):
+                prefix = r["contact_id"].rsplit("-", 1)[0] + "-"
+                bucket = out.setdefault(prefix, {})
+                bucket[r["status"] or "pending"] = bucket.get(r["status"] or "pending", 0) + 1
+    except sqlite3.Error:
+        return {}
+    return out
+
+
+def audiences_payload():
+    by_prefix = _audience_status_counts()
+    auds = []
+    for a in csv_audiences():
+        row = dict(a)
+        status = by_prefix.get(a.get("contact_prefix") or "", {})
+        row["status_counts"] = status
+        row["contacts"] = sum(status.values()) or a.get("added", 0)
+        auds.append(row)
+    return {"ok": True, "audiences": auds}
+
+
+def audience_detail_payload(audience_id, limit=2000):
+    aud = next((a for a in csv_audiences() if a.get("id") == audience_id), None)
+    if not aud:
+        return None
+    prefix = aud.get("contact_prefix") or ""
+    contacts, total = [], 0
+    if prefix:
+        try:
+            with db_connect() as conn:
+                total = conn.execute("SELECT COUNT(*) FROM contacts WHERE contact_id LIKE ?",
+                                     (prefix + "%",)).fetchone()[0]
+                contacts = [dict(r) for r in conn.execute(
+                    "SELECT contact_id, first_name, last_name, email, title, company, "
+                    "linkedin_url, persona, domain, status, batch_id "
+                    "FROM contacts WHERE contact_id LIKE ? ORDER BY rowid LIMIT ?",
+                    (prefix + "%", int(limit)))]
+        except sqlite3.Error:
+            pass
+    return {"ok": True, "audience": aud, "contacts": contacts, "total": total}
+
+
+def do_upload_audience(name, filename, csv_text, by=None):
+    """Save the uploaded CSV to the volume, shell out to csv_audience.py for the
+    parse + DB ingest, then record the audience. Caller holds INGEST_LOCK."""
+    name = (name or "").strip() or (filename or "").rsplit(".", 1)[0].strip() or "CSV upload"
+    if len(name) > 100:
+        return {"ok": False, "error": "audience name must be under 100 characters"}
+    if not (csv_text or "").strip():
+        return {"ok": False, "error": "the uploaded CSV is empty"}
+    if len(csv_text.encode("utf-8", "replace")) > MAX_CSV_UPLOAD:
+        return {"ok": False, "error": "CSV too large (10 MB max) — split the file"}
+    existing_ids = {a.get("id") for a in csv_audiences()}
+    aid = f"aud-{secrets.token_hex(4)}"
+    while aid in existing_ids:
+        aid = f"aud-{secrets.token_hex(4)}"
+    CSV_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    csv_path = CSV_UPLOADS_DIR / f"{aid}.csv"
+    csv_path.write_text(csv_text, encoding="utf-8")
+    args = [str(CSV_AUDIENCE), "ingest", "--file", str(csv_path), "--name", name, "--id", aid]
+    if by:
+        args += ["--by", by]
+    res = run_script(args, timeout=600)
+    lines = [ln for ln in (res.get("stdout") or "").splitlines() if ln.strip()]
+    summary = None
+    try:
+        summary = json.loads(lines[-1]) if lines else None
+    except ValueError:
+        pass
+    if not summary or not summary.get("ok"):
+        try:
+            csv_path.unlink()  # keep only CSVs that produced an audience
+        except OSError:
+            pass
+        if not summary:
+            return {"ok": False, "error": (res.get("stderr") or "csv ingest produced no summary").strip()[-300:],
+                    "stderr": (res.get("stderr") or "")[-2000:]}
+        return {"ok": False, "error": summary.get("error") or "csv ingest failed"}
+    rec = {
+        "id": aid, "name": name, "filename": (filename or "").strip()[:200],
+        "uploaded_at": now_iso(), "by": by,
+        "csv_path": str(csv_path.relative_to(PROJECT_ROOT)),
+        "contact_prefix": summary.get("contact_prefix"),
+        "added": summary.get("added", 0), "new_batches": summary.get("new_batches", 0),
+        "batch_ids": summary.get("batch_ids") or [],
+        "counts": summary.get("counts") or {},
+        "skipped_examples": summary.get("skipped_examples") or [],
+        "mapped_fields": summary.get("mapped_fields") or [],
+    }
+    record_audience(rec)
+    return {"ok": True, "audience": rec, "status": db_status()}
 
 
 # ----------------------------------------------------------------------------
@@ -3681,6 +3825,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(do_hubspot_lists(q, list_type))
             if path == "/api/pull/history":
                 return self._json({"ok": True, **pull_history()})
+            if path == "/api/audiences":
+                return self._json(audiences_payload())
+            if path.startswith("/api/audiences/"):
+                aid = path[len("/api/audiences/"):]
+                detail = audience_detail_payload(aid)
+                if detail is None:
+                    return self._error(404, f"no audience {aid}")
+                return self._json(detail)
             if path == "/api/slas":
                 return self._json(slas_payload())
             if path.startswith("/api/slas/") and path.endswith("/status"):
@@ -3785,6 +3937,36 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(do_ingest(list_id, source="manual", by=me))
                 finally:
                     INGEST_LOCK.release()
+            if path == "/api/audiences/upload":
+                try:
+                    length = int(self.headers.get("Content-Length", 0) or 0)
+                except (TypeError, ValueError):
+                    length = 0
+                if length > MAX_CSV_UPLOAD * 2:  # JSON-string escaping overhead
+                    return self._error(413, "CSV too large (10 MB max) — split the file")
+                body = self._read_body()
+                csv_text = body.get("csv")
+                if not isinstance(csv_text, str):
+                    csv_text = ""
+                # Same lock as pulls/SLAs: the ingest writes contacts + batches.
+                if not INGEST_LOCK.acquire(timeout=1):
+                    return self._error(409, "a pull is already running (manual or SLA) — try again in a minute")
+                try:
+                    me = verify_token(bearer_from_headers(self.headers))
+                    return self._json(do_upload_audience(body.get("name"), body.get("filename"),
+                                                         csv_text, by=me))
+                finally:
+                    INGEST_LOCK.release()
+            if path.startswith("/api/audiences/") and path.endswith("/rename"):
+                aid = path[len("/api/audiences/"):-len("/rename")]
+                body = self._read_body()
+                new_name = str(body.get("name") or "").strip()
+                if not new_name or len(new_name) > 100:
+                    return self._error(400, "name required (max 100 chars)")
+                aud = rename_audience(aid, new_name)
+                if aud is None:
+                    return self._error(404, f"no audience {aid}")
+                return self._json({"ok": True, "audience": aud})
             if path == "/api/slas" or path.startswith("/api/slas/"):
                 me = verify_token(bearer_from_headers(self.headers))
                 body = self._read_body()

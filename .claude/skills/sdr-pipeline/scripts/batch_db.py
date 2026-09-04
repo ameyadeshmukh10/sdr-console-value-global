@@ -194,13 +194,18 @@ def init_schema(conn):
 
 
 def upsert_contacts(conn, rows):
-    """Insert new contacts (ignore existing). Returns count of newly inserted."""
+    """Insert new contacts (ignore existing). Returns count of newly inserted.
+
+    A row may carry an explicit `domain` (e.g. a CSV upload's company-website
+    domain, more accurate than a personal mailbox's); otherwise the email domain
+    is used — it keys the account_signals research/tech/hiring caches."""
     before = conn.execute("SELECT COUNT(*) FROM contacts").fetchone()[0]
     conn.executemany("""
         INSERT OR IGNORE INTO contacts
           (contact_id, first_name, last_name, email, title, company, linkedin_url, persona, domain, variant, status, updated_at)
         VALUES (:contact_id,:first_name,:last_name,:email,:title,:company,:linkedin_url,:persona,:domain,:variant,'pending',:ts)
-    """, [{"variant": None, **r, "domain": email_domain(r.get("email")), "ts": now()} for r in rows])
+    """, [{"variant": None, **r,
+           "domain": r.get("domain") or email_domain(r.get("email")), "ts": now()} for r in rows])
     conn.commit()
     return conn.execute("SELECT COUNT(*) FROM contacts").fetchone()[0] - before
 

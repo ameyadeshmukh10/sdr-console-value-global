@@ -30,8 +30,9 @@ npm --prefix webui/frontend run dev              # dev server with /api proxy
 1. **Use** (`/`) — **search HubSpot lists** (contact *or* company) and pick one, or type a
    list ID directly. A **contact list** runs `hubspot_pull.py` + `sdr_batches.py init` (shows
    new contacts/batches + pending queue). A **company list** opens the Clay enrichment panel
-   (see *Clay buying-group enrichment* below). Copy generation happens on the Pipeline tab or
-   via `/sdr-batches` in Claude Code.
+   (see *Clay buying-group enrichment* below). A **CSV Upload** panel turns an uploaded
+   contact CSV into a named audience batched straight into the pipeline (see *CSV audiences*
+   below). Copy generation happens on the Pipeline tab or via `/sdr-batches` in Claude Code.
 2. **Pipeline** (`/pipeline`) — **real-time batch progress** (polls `/api/progress`
    every 2.5s with an auto-refresh toggle) while `/sdr-batches` runs in Claude Code,
    plus **enrollment with a dry-run gate**: preview the planned routing first, then a
@@ -105,6 +106,20 @@ merged into `GET /api/hubspot/lists`). Backend: `search_lists()` on `HubSpotClie
 (`POST /crm/v3/lists/search`, requests `hs_list_size`, pages every match and sorts
 newest-created first) → `hubspot_lists.py search "<q>" [--type contact|company]` →
 `GET /api/hubspot/lists?q=&type=`. The manual list-ID input stays as a fallback.
+
+### CSV audiences (Use tab)
+"CSV Upload" below the list picker: upload a CSV of contacts (first/last name, job
+title, email, LinkedIn URL, country, company name/website/industry/size — header
+spellings matched flexibly, email required), give it a name, and it becomes a named
+**audience**: parsed + deduped (in-file and against pipeline.db by email), personas
+assigned from job titles (unmatched titles default to sales-leadership — an upload
+is trusted, unlike a list pull), inserted with synthetic `csv-<suffix>-<n>` ids and
+batched like any pull. The audiences table shows live per-status counts and expands
+to the contact list; audiences can be renamed inline. Endpoints:
+`POST /api/audiences/upload {name, filename, csv}` (10 MB cap, INGEST_LOCK),
+`GET /api/audiences`, `GET /api/audiences/<id>`, `POST /api/audiences/<id>/rename`.
+See CLAUDE.md ("CSV audiences") for the runner (`csv_audience.py`), the registry
+and the synthetic-id rules.
 
 ### SLAs — automatic enrollment rules (Use tab)
 "Schedule SLAs" below the list picker: rules that check HubSpot on a schedule and

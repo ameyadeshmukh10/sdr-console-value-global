@@ -4,11 +4,13 @@ import { Spinner, ErrorBanner, num } from '../components/ui.jsx'
 import ListPicker from '../components/ListPicker.jsx'
 import SourcePanel from '../components/SourcePanel.jsx'
 import SlaPanel from '../components/SlaPanel.jsx'
+import CsvAudiencePanel from '../components/CsvAudiencePanel.jsx'
 
-// Pillar 1 — Use: feed a HubSpot list into the pipeline. Contact lists pull +
-// init directly from the picker (Select → confirm → run, all in one place);
-// company lists enrich the buying group via Clay first. Batch progress and the
-// pipeline stats live on the Pipeline tab — this page is only "get contacts in".
+// Pillar 1 — Use: get contacts into the pipeline. Three ways: a HubSpot list
+// (contact lists pull + init directly from the picker; company lists enrich the
+// buying group via Clay first), a CSV upload (a named audience, batched on the
+// spot), or an SLA rule. Batch progress and the pipeline stats live on the
+// Pipeline tab — this page is only "get contacts in".
 export default function UsePage() {
   const [picked, setPicked] = useState(null)      // {list_id, name, object_type_id, size}
   const [manualId, setManualId] = useState('')     // fallback: type an id by hand
@@ -95,6 +97,8 @@ export default function UsePage() {
       </div>
 
       {picked && isCompany && <SourcePanel list={picked} />}
+
+      <CsvAudiencePanel />
 
       <SlaPanel />
     </div>
