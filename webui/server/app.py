@@ -2245,6 +2245,17 @@ def _poll_batch_job(job_id):
                     except Exception as e:  # noqa: BLE001
                         sys.stderr.write(f"[webui] hiring backfill skipped ({job_id}): {e}\n")
                 threading.Thread(target=_hiring_tail, daemon=True).start()
+            if tail_domains and (os.environ.get("NEWS_DETECT_ENABLED") or "1").strip().lower() not in ("0", "false", "no", "off"):
+                def _news_tail():
+                    try:
+                        import news_signals as N  # noqa: E402
+                        if not N.news_available()[0]:
+                            return
+                        s = N.backfill(domains=tail_domains, workers=2)
+                        sys.stderr.write(f"[webui] news backfill for batch job {job_id}: {s}\n")
+                    except Exception as e:  # noqa: BLE001
+                        sys.stderr.write(f"[webui] news backfill skipped ({job_id}): {e}\n")
+                threading.Thread(target=_news_tail, daemon=True).start()
             return
     except Exception as e:  # noqa: BLE001
         job = _read_batch_job(job_id)
@@ -3321,6 +3332,17 @@ def _hiring_status():
         return False, f"hiring_signals unavailable: {e}"
 
 
+def _news_status():
+    """(available, reason) for the ERP news research. Same degrade contract as
+    _tech_status — without ANTHROPIC_API_KEY the feature reports unavailable
+    and the server keeps running."""
+    try:
+        import news_signals as N  # noqa: E402  (PIPELINE_SCRIPTS is on sys.path)
+        return N.news_available()
+    except Exception as e:  # noqa: BLE001
+        return False, f"news_signals unavailable: {e}"
+
+
 def signals_payload():
     with db_connect() as conn:
         try:
@@ -3337,11 +3359,16 @@ def signals_payload():
         r.pop("hiring_detail", None)  # full title lists stay in the DB — heavy for a list
         r["hiring_age_days"] = _age_days(r.get("hiring_checked_at"))
         r["has_hiring"] = bool(r.get("hiring_signals"))
+        r.pop("news_detail", None)  # per-trigger verdicts stay in the DB — heavy for a list
+        r["news_age_days"] = _age_days(r.get("news_checked_at"))
+        r["has_news"] = bool(r.get("news_signals"))
     available, reason = _tech_status()
     h_available, h_reason = _hiring_status()
+    n_available, n_reason = _news_status()
     return {"signals": rows, "count": len(rows),
             "tech_available": available, "tech_reason": reason,
-            "hiring_available": h_available, "hiring_reason": h_reason}
+            "hiring_available": h_available, "hiring_reason": h_reason,
+            "news_available": n_available, "news_reason": n_reason}
 
 
 def signals_detail(domain):
@@ -3382,11 +3409,19 @@ def signals_detail(domain):
         row["hiring_detail"] = json.loads(row.get("hiring_detail") or "null")
     except (ValueError, TypeError):
         row["hiring_detail"] = None
+    row["news_age_days"] = _age_days(row.get("news_checked_at"))
+    row["has_news"] = bool(row.get("news_signals"))
+    try:
+        row["news_detail"] = json.loads(row.get("news_detail") or "null")
+    except (ValueError, TypeError):
+        row["news_detail"] = None
     available, reason = _tech_status()
     h_available, h_reason = _hiring_status()
+    n_available, n_reason = _news_status()
     return {"ok": True, "domain": domain, "signal": row, "contacts": contacts,
             "tech_available": available, "tech_reason": reason,
-            "hiring_available": h_available, "hiring_reason": h_reason}
+            "hiring_available": h_available, "hiring_reason": h_reason,
+            "news_available": n_available, "news_reason": n_reason}
 
 
 def do_refresh_signal(domain, company=None):
@@ -3565,6 +3600,94 @@ def start_hiring_backfill(limit=None, stale_days=None, force=False):
         try:
             summary = H.backfill(stale_days=stale_days, limit=limit, force=force,
                                  workers=3, progress=_progress)
+            job.update(summary)  # total/detected/skipped/errors/hubspot_ok/hubspot_missing
+            job["status"] = "done"
+        except Exception as e:  # noqa: BLE001
+            job["status"] = "error"
+            job["error"] = str(e)[:300]
+        finally:
+            job["current"] = None
+            job["finished_at"] = now_iso()
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"ok": True, "job_id": job_id, "total": job["total"]}, 200
+
+
+def do_detect_news(domain, force=False):
+    """ERP news research for one domain (Signals drawer button). In-process
+    like do_detect_tech — news_signals writes via batch_db's own read-write
+    connection. Blocks for the length of the scan (two waves of web-search
+    calls, typically 1-3 minutes); the drawer shows a spinner meanwhile.
+    Returns (payload, status)."""
+    domain = (domain or "").strip().lower()
+    if not domain:
+        return {"ok": False, "error": "domain required"}, 400
+    available, reason = _news_status()
+    if not available:
+        return {"ok": False, "error": f"news research unavailable: {reason}"}, 501
+    company = None
+    with db_connect() as conn:
+        try:
+            row = conn.execute(
+                "SELECT company FROM contacts WHERE domain=? AND company IS NOT NULL AND company!='' LIMIT 1",
+                (domain,)).fetchone()
+            company = row["company"] if row else None
+        except sqlite3.Error:
+            company = None
+    import news_signals as N  # noqa: E402
+    try:
+        res = N.detect_and_store(domain, company=company, force=force)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)[:300]}, 502
+    payload = signals_payload()
+    payload["ok"] = True
+    payload["detected"] = res
+    return payload, 200
+
+
+# ---- bulk news backfill (async in-process job; one at a time) -------------------
+NEWS_JOBS = {}
+NEWS_LOCK = threading.Lock()   # guards the one-running-job check-then-insert
+_NEWS_SEQ = [0]
+
+
+def start_news_backfill(limit=None, stale_days=None, force=False):
+    """Research every account_signals domain with no news scan yet (the UI
+    'Research news' button / prod backfill). Independent of the tech + hiring
+    job registries. Every non-skipped scan is up to 5 web-search API calls,
+    so prefer a `limit` on first runs. Returns (payload, status)."""
+    available, reason = _news_status()
+    if not available:
+        return {"ok": False, "error": f"news research unavailable: {reason}"}, 501
+    import news_signals as N  # noqa: E402
+    with NEWS_LOCK:
+        if any(j["status"] == "running" for j in NEWS_JOBS.values()):
+            return {"ok": False, "error": "a news backfill is already running"}, 409
+        _NEWS_SEQ[0] += 1
+        job_id = f"news-{_NEWS_SEQ[0]}"
+        job = {"job_id": job_id, "status": "running", "total": 0, "done": 0,
+               "detected": 0, "skipped": 0, "errors": 0, "hubspot_ok": 0,
+               "hubspot_missing": 0, "current": None, "log": [], "error": None,
+               "started_at": now_iso(), "finished_at": None}
+        NEWS_JOBS[job_id] = job
+    # queue size up front so the UI can show progress before the first result
+    with db_connect() as conn:
+        try:
+            job["total"] = conn.execute(
+                "SELECT COUNT(*) FROM account_signals WHERE news_checked_at IS NULL").fetchone()[0]
+        except sqlite3.Error:
+            pass
+
+    def _progress(done, total, domain, res):
+        job["done"], job["total"], job["current"] = done, total, domain
+        status = ("error" if (res.get("error_exc") or res.get("news_error"))
+                  else "skip" if res.get("skipped") else "ok")
+        job["log"] = (job["log"] + [f"{domain}: {status}"])[-40:]
+
+    def _run():
+        try:
+            summary = N.backfill(stale_days=stale_days, limit=limit, force=force,
+                                 workers=2, progress=_progress)
             job.update(summary)  # total/detected/skipped/errors/hubspot_ok/hubspot_missing
             job["status"] = "done"
         except Exception as e:  # noqa: BLE001
@@ -3796,6 +3919,12 @@ class Handler(BaseHTTPRequestHandler):
                 job = TECH_JOBS.get(job_id)
                 if not job:
                     return self._error(404, f"no tech job {job_id}")
+                return self._json(dict(job))
+            if path.startswith("/api/signals/news/status/"):
+                job_id = path[len("/api/signals/news/status/"):]
+                job = NEWS_JOBS.get(job_id)
+                if not job:
+                    return self._error(404, f"no news job {job_id}")
                 return self._json(dict(job))
             if path.startswith("/api/signals/hiring/status/"):
                 job_id = path[len("/api/signals/hiring/status/"):]
@@ -4069,6 +4198,16 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/signals/tech/backfill":
                 body = self._read_body()
                 payload, code = start_tech_backfill(
+                    limit=body.get("limit"), stale_days=body.get("stale_days"),
+                    force=bool(body.get("force")))
+                return self._json(payload, code)
+            if path == "/api/signals/news/detect":
+                body = self._read_body()
+                payload, code = do_detect_news(body.get("domain"), force=bool(body.get("force")))
+                return self._json(payload, code)
+            if path == "/api/signals/news/backfill":
+                body = self._read_body()
+                payload, code = start_news_backfill(
                     limit=body.get("limit"), stale_days=body.get("stale_days"),
                     force=bool(body.get("force")))
                 return self._json(payload, code)

@@ -67,6 +67,11 @@ npm --prefix webui/frontend run dev              # dev server with /api proxy
    cached by email domain in `account_signals` (pipeline.db) and reused for **90 days** — a company
    is web-searched once instead of once per contact / per re-run. Browse cached accounts (domain,
    signal, recent vs fallback, age in days) and **force-refresh** one to re-search on demand.
+   Alongside the signal: the **Tech** column (technographic scan; per-row ⌁ Detect + bulk
+   "Detect missing"), the **Hiring** column (Prospeo job-postings scan; drawer ⚑ Detect hiring +
+   bulk "Detect hiring"), and the **News** column — the five web-researched ERP triggers (M&A
+   carve-out, ERP migration, license audit, EBS on OCI, EBS performance; 30-day cache; drawer
+   **⌕ Research news** shows the per-trigger scores/sources, bulk "Research news" backfills).
 
 ### Cost: Message Batches API (50% off, async)
 The Pipeline tab also has a **Batch API** panel: submit N pending batches to Anthropic's Message

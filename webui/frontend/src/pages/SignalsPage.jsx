@@ -9,8 +9,12 @@ import SignalDetail from '../components/SignalDetail.jsx'
 // per-row Detect re-scans one company, "Detect missing" backfills the rest.
 // Hiring = the Prospeo job-postings scan (open roles + sales subset), same cache;
 // single-domain detect lives in the row drawer, "Detect hiring" backfills the rest.
+// News = the ERP-trigger web research (M&A carve-out, ERP migration, license audit,
+// EBS-on-OCI, EBS performance), same cache on a 30-day window; single-domain
+// research lives in the row drawer, "Research news" backfills the rest.
 const NO_TECH = 'No signals detected'
 const NO_HIRING = 'No open roles detected'
+const NO_NEWS = 'No ERP news signals detected'
 
 export default function SignalsPage() {
   const [data, setData] = useState(null)
@@ -19,6 +23,7 @@ export default function SignalsPage() {
   const [detecting, setDetecting] = useState(null)
   const [bulkJob, setBulkJob] = useState(null)
   const [hiringJob, setHiringJob] = useState(null)
+  const [newsJob, setNewsJob] = useState(null)
   const [openDomain, setOpenDomain] = useState(null)
 
   function load() {
@@ -62,6 +67,14 @@ export default function SignalsPage() {
     } catch (e) { setError(e.message) }
   }
 
+  async function startNewsBulk() {
+    setError(null)
+    try {
+      const d = await api.newsBackfill({})
+      setNewsJob({ job_id: d.job_id, status: 'running', total: d.total, done: 0 })
+    } catch (e) { setError(e.message) }
+  }
+
   // Poll the bulk job while it runs; reload the table when it lands.
   useEffect(() => {
     if (!bulkJob || bulkJob.status !== 'running') return
@@ -88,6 +101,19 @@ export default function SignalsPage() {
     return () => clearInterval(t)
   }, [hiringJob?.job_id, hiringJob?.status])
 
+  // And the news backfill (its own registry; scans take minutes each).
+  useEffect(() => {
+    if (!newsJob || newsJob.status !== 'running') return
+    const t = setInterval(async () => {
+      try {
+        const j = await api.newsBackfillStatus(newsJob.job_id)
+        setNewsJob(j)
+        if (j.status !== 'running') load()
+      } catch (e) { setNewsJob(null); setError(e.message) }
+    }, 4000)
+    return () => clearInterval(t)
+  }, [newsJob?.job_id, newsJob?.status])
+
   const signals = data?.signals || []
   const fresh = signals.filter((s) => s.fresh).length
   const recent = signals.filter((s) => s.has_recent).length
@@ -101,11 +127,16 @@ export default function SignalsPage() {
   const missingHiring = signals.filter((s) => s.hiring_age_days == null).length
   const hiringOff = data ? data.hiring_available === false : false
   const hiringRunning = hiringJob?.status === 'running'
+  const newsScanned = signals.filter((s) => s.news_age_days != null).length
+  const withNews = signals.filter((s) => s.news_signals && s.news_signals !== NO_NEWS).length
+  const missingNews = signals.filter((s) => s.news_age_days == null).length
+  const newsOff = data ? data.news_available === false : false
+  const newsRunning = newsJob?.status === 'running'
 
   return (
     <div>
       <h1 className="page-title">Signals</h1>
-      <p className="page-sub">Per-company research cache. Fresh entries (&lt;90 days) are reused, so the AI SDR skips the web search. Tech = detected stack from a website + DNS scan. Hiring = open roles from a live job-postings lookup (sales roles feed email 2).</p>
+      <p className="page-sub">Per-company research cache. Fresh entries (&lt;90 days) are reused, so the AI SDR skips the web search. Tech = detected stack from a website + DNS scan. Hiring = open roles from a live job-postings lookup (sales roles feed email 2). News = web-researched ERP triggers (M&amp;A carve-out, ERP migration, license audit, EBS on OCI, EBS performance; 30-day cache).</p>
 
       <ErrorBanner error={error} />
 
@@ -120,9 +151,12 @@ export default function SignalsPage() {
         <Stat label="Hiring scanned" value={hiringOff ? '—' : num(hiringScanned)}
           sub={hiringOff ? (data?.hiring_reason || 'detection unavailable') : `${num(withHiring)} with open roles`}
           tone={hiringOff ? 'warn' : undefined} />
+        <Stat label="News researched" value={newsOff ? '—' : num(newsScanned)}
+          sub={newsOff ? (data?.news_reason || 'research unavailable') : `${num(withNews)} with ERP triggers`}
+          tone={newsOff ? 'warn' : undefined} />
       </div>
 
-      {data && ((!techOff && (missing > 0 || bulkJob)) || (!hiringOff && (missingHiring > 0 || hiringJob))) && (
+      {data && ((!techOff && (missing > 0 || bulkJob)) || (!hiringOff && (missingHiring > 0 || hiringJob)) || (!newsOff && (missingNews > 0 || newsJob))) && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
           {!techOff && missing > 0 && !bulkRunning && (
             <button className="ghost sm" onClick={startBulk}>Detect missing ({num(missing)})</button>
@@ -149,6 +183,19 @@ export default function SignalsPage() {
                   : <>Hiring backfill failed: {hiringJob.error || 'unknown error'}</>}
             </span>
           )}
+          {!newsOff && missingNews > 0 && !newsRunning && (
+            <button className="ghost sm" onClick={startNewsBulk}
+              title="Web-research the 5 ERP triggers per company (up to 5 web-search calls each; minutes per company)">Research news ({num(missingNews)})</button>
+          )}
+          {!newsOff && newsJob && (
+            <span className="muted" style={{ fontSize: 13 }}>
+              {newsRunning
+                ? <>Researching news… {newsJob.done}/{newsJob.total}{newsJob.current ? ` (${newsJob.current})` : ''}{newsJob.errors ? ` · ${newsJob.errors} errors` : ''}</>
+                : newsJob.status === 'done'
+                  ? <>News backfill done: {newsJob.detected} researched, {newsJob.skipped} skipped{newsJob.errors ? `, ${newsJob.errors} errors` : ''}</>
+                  : <>News backfill failed: {newsJob.error || 'unknown error'}</>}
+            </span>
+          )}
         </div>
       )}
 
@@ -156,21 +203,22 @@ export default function SignalsPage() {
         <div className="empty">No cached signals yet. They populate as you generate batches.</div>
       ) : (
         <div className="panel" style={{ padding: 0, overflowX: 'auto' }}>
-          {/* table-layout:fixed makes these 8 widths (summing to 100%) authoritative,
+          {/* table-layout:fixed makes these 9 widths (summing to 100%) authoritative,
               so the actions column keeps room for both buttons and the long
-              signal/tech/hiring text truncates instead of blowing the table wide.
-              minWidth floors it so buttons never clip; the panel scrolls on a
-              narrow window. */}
-          <table className="dense" style={{ tableLayout: 'fixed', width: '100%', minWidth: 1080 }}>
+              signal/tech/hiring/news text truncates instead of blowing the table
+              wide. minWidth floors it so buttons never clip; the panel scrolls on
+              a narrow window. */}
+          <table className="dense" style={{ tableLayout: 'fixed', width: '100%', minWidth: 1220 }}>
             <thead><tr>
-              <th style={{ width: '13%' }}>Domain</th>
-              <th style={{ width: '10%' }}>Company</th>
-              <th style={{ width: '6%' }}>Type</th>
-              <th style={{ width: '19%' }}>Signal</th>
-              <th style={{ width: '15%' }}>Tech</th>
-              <th style={{ width: '16%' }}>Hiring</th>
+              <th style={{ width: '12%' }}>Domain</th>
+              <th style={{ width: '9%' }}>Company</th>
+              <th style={{ width: '5%' }}>Type</th>
+              <th style={{ width: '15%' }}>Signal</th>
+              <th style={{ width: '12%' }}>Tech</th>
+              <th style={{ width: '13%' }}>Hiring</th>
+              <th style={{ width: '15%' }}>News</th>
               <th style={{ width: '4%' }}>Age</th>
-              <th style={{ width: '17%' }}></th>
+              <th style={{ width: '15%' }}></th>
             </tr></thead>
             <tbody>
               {signals.map((s) => (
@@ -215,6 +263,20 @@ export default function SignalsPage() {
                       <span className="muted" title={s.hiring_age_days != null ? `checked ${s.hiring_age_days}d ago` : undefined}>none detected</span>
                     ) : s.hiring_error ? (
                       <span className="badge" style={{ color: 'var(--red)', borderColor: 'var(--red)' }} title={s.hiring_error}>scan failed</span>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </td>
+                  <td>
+                    {s.news_signals && s.news_signals !== NO_NEWS ? (
+                      <span className="muted" title={`${s.news_signals}${s.news_age_days != null ? ` (researched ${s.news_age_days}d ago)` : ''}`}
+                        style={{ display: 'inline-block', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom' }}>
+                        {s.news_signals}
+                      </span>
+                    ) : s.news_signals === NO_NEWS ? (
+                      <span className="muted" title={s.news_age_days != null ? `researched ${s.news_age_days}d ago` : undefined}>none found</span>
+                    ) : s.news_error ? (
+                      <span className="badge" style={{ color: 'var(--red)', borderColor: 'var(--red)' }} title={s.news_error}>research failed</span>
                     ) : (
                       <span className="muted">—</span>
                     )}

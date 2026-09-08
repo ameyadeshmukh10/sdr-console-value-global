@@ -52,7 +52,7 @@ HubSpot, and reports on results — including nightly AI SDR **deal attribution*
 
 | Store | Where | What |
 |---|---|---|
-| SQLite `data/outreach/pipeline.db` | volume | contacts, batches, signals cache (`account_signals`, incl. the technographic `tech_*` and hiring `hiring_signals/hiring_detail/hiring_checked_at/hiring_error` columns), `hubspot_activity_log` (engagement-logging ledger), `bison_lead_map`, `heyreach_events` inbox, `unenrollment_log` (suppression ledger). Schema: `scripts/batch_db.py`. The web server opens it READ-ONLY; writes go through pipeline scripts (and their in-process module calls, e.g. signal refresh / tech + hiring detect). |
+| SQLite `data/outreach/pipeline.db` | volume | contacts, batches, signals cache (`account_signals`, incl. the technographic `tech_*`, hiring `hiring_*`, and ERP-trigger news `news_*` columns), `hubspot_activity_log` (engagement-logging ledger), `bison_lead_map`, `heyreach_events` inbox, `unenrollment_log` (suppression ledger). Schema: `scripts/batch_db.py`. The web server opens it READ-ONLY; writes go through pipeline scripts (and their in-process module calls, e.g. signal refresh / tech + hiring + news detect). |
 | JSONL under `data/` | volume | campaign stats, generated outreach copy, interested-reply threads/analysis. |
 | MongoDB db `aisdr` | Railway MongoDB service | AI SDR deal attribution: `emails`, `contacts`, `deals`, `sync_state` (see below). Accessed only through `scripts/mongo_store.py`. |
 
@@ -200,6 +200,53 @@ hand-rolled retry; NO requests/tenacity/pyyaml — zero new pip deps).
   with `PROSPEO_API_KEY` unset (endpoints return `hiring_available:false`, detect → 501).
   Run a first bulk backfill with `--limit` — every non-skipped scan is a credit.
   `--self-test` is offline (no key/network/DB).
+
+## Company news signals — the five ERP triggers (added 2026-09)
+
+Per-account web research across the five Value Global ERP Data Retirement buying
+triggers, via the Anthropic Messages API + server-side `web_search` (the same channel
+`generate_batch.py` researches with — `ANTHROPIC_API_KEY`, no new deps).
+
+- **Engine:** `.claude/skills/sdr-pipeline/scripts/news_signals.py` (module + CLI;
+  offline `--self-test`). Triggers, canonical order: `ma_carveout` (acquisition/
+  divestiture/carve-out, strict 90-day window; divestiture scores hottest),
+  `erp_migration` (Fusion Cloud / S/4HANA program; mid-implementation is the sweet
+  spot), `license_audit` (composite Oracle-audit-exposure proxies; cross-references
+  ma_carveout's verdict), `ebs_oci` (EBS lifted onto OCI and STILL on EBS — OCI ≠
+  Fusion; cross-references erp_migration so a full re-platform isn't double-counted),
+  `ebs_performance` (month-end-close pain proxies, score capped at 75; **pre-condition:
+  runs ONLY when the tech scan detected `oracle_ebs`** — otherwise recorded as skipped,
+  and re-evaluated on the next refresh once a tech scan lands). One Messages call per
+  trigger (`NEWS_MAX_SEARCHES` searches each, default 4; `NEWS_MODEL` overrides
+  `CLAUDE_MODEL`), run in two waves so cross-referenced triggers see their upstream
+  verdicts: wave 1 = ma_carveout + erp_migration + ebs_performance (concurrent),
+  wave 2 = license_audit + ebs_oci. Each call returns strict JSON
+  `{found, score 0-100, headline, summary, date, source_url, details}`; verdicts are
+  clamped/normalized (`classify_verdict`) and a bad verdict never crashes the scan.
+- **Storage** (`account_signals.news_*`, semantics mirror tech/hiring): `news_signals`
+  = found triggers score-desc as `"M&A carve-out 85: <headline> · ERP migration 70: …"`
+  or the literal `"No ERP news signals detected"`; NULL + `news_error` ONLY when EVERY
+  researched trigger errored (retries next touch) — a partial scan stores its
+  successes and counts as definitive. `news_detail` = per-trigger verdicts JSON (incl.
+  skipped reasons, per-trigger errors, searches, model, HubSpot outcome).
+  `news_checked_at` drives `NEWS_REFRESH_DAYS` (**default 30**, shorter than
+  tech/hiring because the trigger windows are 90-day).
+- **When it runs:** (1) Signals view — drawer "⌕ Research news" (in-process, blocks
+  1-3 min behind a spinner) + bulk "Research news" (`POST /api/signals/news/detect`,
+  `POST /api/signals/news/backfill` + `GET /api/signals/news/status/<id>`, separate
+  `NEWS_JOBS` registry, workers=2); (2) fire-and-forget tail after a Message-Batches
+  job completes (`NEWS_DETECT_ENABLED=0` kills it); (3) CLI (`--missing --limit N`,
+  `--triggers a,b` scoping; `NEWS_TRIGGERS` env scopes everywhere). Deliberately NOT
+  inline under `generate_batch`'s per-domain lock — a scan takes minutes, not seconds.
+- **HubSpot write-back:** found-trigger lines (with score/date/source URL) PATCH the
+  company property `erp_news_signals` (auto-ensured, textarea; matched by `domain`;
+  best-effort; `NEWS_HUBSPOT_WRITEBACK=0` kills it).
+- **Cost gotcha (load-bearing):** every non-skipped scan is up to 5 web-search API
+  calls — run first backfills with `--limit`, and remember the post-batch tail
+  researches every new domain a batch touches.
+- **Not (yet) a copy consumer:** generation prompts do not read `news_signals`; the
+  data is for targeting/reporting until a copy play is designed for it (keep the
+  `import news_signals` lazy — boot rule — if you wire one).
 
 ## Signal notes contact write-back (added 2026-08)
 

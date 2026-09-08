@@ -149,6 +149,9 @@ export const api = {
   detectHiring: (domain, force) => post('/api/signals/hiring/detect', { domain, force: !!force }),
   hiringBackfill: (opts) => post('/api/signals/hiring/backfill', opts || {}),
   hiringBackfillStatus: (jobId) => get('/api/signals/hiring/status/' + jobId),
+  detectNews: (domain, force) => post('/api/signals/news/detect', { domain, force: !!force }),
+  newsBackfill: (opts) => post('/api/signals/news/backfill', opts || {}),
+  newsBackfillStatus: (jobId) => get('/api/signals/news/status/' + jobId),
   variants: () => get('/api/variants'),
   samples: (body) => post('/api/samples', body),
 }

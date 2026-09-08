@@ -5,11 +5,13 @@ import { Badge, Spinner, ErrorBanner } from './ui.jsx'
 // Slide-over drawer for one cached account: the full research signal, the
 // technographic detection breakdown (per-vendor source/confidence/evidence +
 // scan metadata + HubSpot write-back), the hiring scan (open roles + the
-// sales/GTM subset that feeds email 2), and the contacts reusing this row.
+// sales/GTM subset that feeds email 2), the ERP news research (per-trigger
+// verdicts with scores + sources), and the contacts reusing this row.
 // onChanged(payload) hands the parent the fresh signals payload after an action
 // so the list updates in place (refresh/detect both return the full payload).
 const NO_TECH = 'No signals detected'
 const NO_HIRING = 'No open roles detected'
+const NO_NEWS = 'No ERP news signals detected'
 
 function pct(x) { return x == null ? '—' : `${Math.round(x * 100)}%` }
 
@@ -26,7 +28,7 @@ function hubspotLine(hs, envVar = 'TECH_HUBSPOT_WRITEBACK') {
 export default function SignalDetail({ domain, onClose, onChanged }) {
   const [d, setD] = useState(null)
   const [error, setError] = useState(null)
-  const [busy, setBusy] = useState(null) // 'refresh' | 'detect' | 'hiring'
+  const [busy, setBusy] = useState(null) // 'refresh' | 'detect' | 'hiring' | 'news'
 
   function load() {
     setError(null)
@@ -41,7 +43,9 @@ export default function SignalDetail({ domain, onClose, onChanged }) {
         ? await api.refreshSignal(domain)
         : kind === 'hiring'
           ? await api.detectHiring(domain, true)
-          : await api.detectTech(domain, true)
+          : kind === 'news'
+            ? await api.detectNews(domain, true)
+            : await api.detectTech(domain, true)
       if (payload && payload.ok === false) setError(payload.error || `${kind} failed`)
       else if (onChanged && payload?.signals) onChanged(payload)
       load() // re-pull this drawer's detail (tech_detail, hiring_detail, contacts)
@@ -55,9 +59,13 @@ export default function SignalDetail({ domain, onClose, onChanged }) {
   const hd = s?.hiring_detail
   const salesTitles = hd?.sales_titles || []
   const allTitles = hd?.active_titles || []
+  const nd = s?.news_detail
+  const newsTriggers = Object.entries(nd?.triggers || {}) // insertion order = canonical trigger order
+  const newsFound = newsTriggers.filter(([, r]) => r.found).length
   const contacts = d?.contacts || []
   const techOff = d ? d.tech_available === false : false
   const hiringOff = d ? d.hiring_available === false : false
+  const newsOff = d ? d.news_available === false : false
 
   return (
     <>
@@ -98,6 +106,15 @@ export default function SignalDetail({ domain, onClose, onChanged }) {
                   : s.hiring_error
                     ? <span className="badge" style={{ color: 'var(--red)', borderColor: 'var(--red)' }}>hiring scan failed</span>
                     : <span className="badge muted">hiring not scanned</span>}
+              {s.news_signals && s.news_signals !== NO_NEWS
+                ? <span className="badge" style={{ color: 'var(--jade)', borderColor: 'var(--jade)' }}>
+                    {newsFound || 1} ERP trigger{(newsFound || 1) === 1 ? '' : 's'}
+                  </span>
+                : s.news_signals === NO_NEWS
+                  ? <span className="badge muted">no ERP triggers</span>
+                  : s.news_error
+                    ? <span className="badge" style={{ color: 'var(--red)', borderColor: 'var(--red)' }}>news research failed</span>
+                    : <span className="badge muted">news not researched</span>}
             </div>
 
             <div className="row" style={{ gap: 8, marginTop: 14 }}>
@@ -111,6 +128,10 @@ export default function SignalDetail({ domain, onClose, onChanged }) {
               <button className="ghost sm" disabled={hiringOff || busy === 'hiring'} onClick={() => act('hiring')}
                 title={hiringOff ? (d.hiring_reason || 'detection unavailable') : 'Check live job postings (one Prospeo credit)'}>
                 {busy === 'hiring' ? <Spinner /> : '⚑ Detect hiring'}
+              </button>
+              <button className="ghost sm" disabled={newsOff || busy === 'news'} onClick={() => act('news')}
+                title={newsOff ? (d.news_reason || 'research unavailable') : 'Web-research the 5 ERP triggers (takes a minute or three)'}>
+                {busy === 'news' ? <Spinner /> : '⌕ Research news'}
               </button>
             </div>
 
@@ -201,6 +222,55 @@ export default function SignalDetail({ domain, onClose, onChanged }) {
                 {hd.error_code && (<><span className="k">Error code</span><span className="mono">{hd.error_code}</span></>)}
                 <span className="k">Duration</span><span>{hd.duration_ms != null ? `${hd.duration_ms} ms` : '—'}</span>
                 <span className="k">HubSpot</span><span>{hubspotLine(hd.hubspot, 'HIRING_HUBSPOT_WRITEBACK')}</span>
+              </div>
+            )}
+
+            <div className="section-h">ERP news triggers</div>
+            {s.news_error ? (
+              <div className="touch"><div className="body" style={{ color: 'var(--red)' }}>Research failed: {s.news_error}</div></div>
+            ) : !s.news_signals && newsTriggers.length === 0 ? (
+              <p className="muted" style={{ marginBottom: 12 }}>Not researched yet. Use Research news above.</p>
+            ) : (
+              newsTriggers.map(([tid, r]) => (
+                <div key={tid} className="touch" style={{ marginBottom: 8 }}>
+                  <div className="body">
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+                      <strong>{r.label || tid}</strong>
+                      {r.found
+                        ? <span className="badge" style={{ color: 'var(--jade)', borderColor: 'var(--jade)' }}>score {r.score}</span>
+                        : r.skipped
+                          ? <span className="badge muted">skipped</span>
+                          : r.error
+                            ? <span className="badge" style={{ color: 'var(--red)', borderColor: 'var(--red)' }}>error</span>
+                            : <span className="badge muted">not found</span>}
+                      {r.date && <span className="muted" style={{ fontSize: 12 }}>{r.date}</span>}
+                    </div>
+                    {r.found && r.headline && <div style={{ marginTop: 4 }}>{r.headline}</div>}
+                    {r.skipped
+                      ? <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{r.skipped}</div>
+                      : r.error
+                        ? <div style={{ fontSize: 12, marginTop: 4, color: 'var(--red)' }}>{r.error}</div>
+                        : r.summary
+                          ? <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{r.summary}</div>
+                          : null}
+                    {r.source_url && (
+                      <div style={{ fontSize: 12, marginTop: 4 }}>
+                        <a href={r.source_url} target="_blank" rel="noreferrer" className="mono"
+                          style={{ wordBreak: 'break-all' }}>{r.source_url}</a>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+            {nd && (
+              <div className="kv">
+                {s.news_checked_at && (<><span className="k">Researched</span><span>{s.news_checked_at}{s.news_age_days != null ? ` (${s.news_age_days}d ago)` : ''}</span></>)}
+                <span className="k">Triggers found</span><span>{newsFound}</span>
+                <span className="k">Web searches</span><span>{nd.web_searches ?? '—'}</span>
+                <span className="k">Duration</span><span>{nd.duration_ms != null ? `${Math.round(nd.duration_ms / 1000)} s` : '—'}</span>
+                {nd.model && (<><span className="k">Model</span><span className="mono">{nd.model}</span></>)}
+                <span className="k">HubSpot</span><span>{hubspotLine(nd.hubspot, 'NEWS_HUBSPOT_WRITEBACK')}</span>
               </div>
             )}
 

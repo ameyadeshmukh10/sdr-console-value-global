@@ -219,6 +219,38 @@ re-scanned (or re-billed) until the refresh window lapses.
 
 ---
 
+## 8. Company news signals (the five ERP buying triggers)
+
+Web research per account (Anthropic API + server-side `web_search`; uses
+`ANTHROPIC_API_KEY`) across the five Value Global ERP Data Retirement triggers —
+**M&A carve-out** (last 90 days), **ERP migration** (Fusion Cloud / S/4HANA program),
+**License audit** (Oracle audit exposure), **EBS on OCI** (lift-and-shift, still on
+EBS), and **EBS performance** (runs ONLY when the tech scan detected Oracle
+E-Business Suite). Each trigger is one web-search call returning a scored JSON
+verdict (found, score 0-100, headline, summary, date, source URL); the found
+triggers become a line like `M&A carve-out 85: Acme completes carve-out of FooCo`.
+Results live on the Signals view (News column, drawer **⌕ Research news** with the
+per-trigger breakdown, bulk **Research news**), are cached for `NEWS_REFRESH_DAYS`
+(default 30), refresh as a tail after batch generation (`NEWS_DETECT_ENABLED=0`
+disables), and are written to the HubSpot company property `erp_news_signals`
+(disable: `NEWS_HUBSPOT_WRITEBACK=0`). Manual runs:
+
+```bash
+P=.claude/skills/sdr-pipeline/scripts
+
+python3 $P/news_signals.py --domain acme.com             # research one company (cached 30d; --force to re-run)
+python3 $P/news_signals.py --missing --limit 20          # backfill accounts with no research yet ($ per scan!)
+python3 $P/news_signals.py --domain acme.com --triggers ma_carveout,erp_migration   # scope the triggers
+python3 $P/news_signals.py --self-test                   # offline check (no network, no key needed)
+```
+
+A full scan is up to 5 web-search calls (~1-3 minutes, real API spend) — prefer
+`--limit` on a first bulk backfill, or scope with `--triggers` / `NEWS_TRIGGERS`.
+A scan only stores NULL + `news_error` (and retries next touch) when EVERY trigger
+call failed; partial results are kept and reused like any other.
+
+---
+
 ## Where things live
 
 ```
