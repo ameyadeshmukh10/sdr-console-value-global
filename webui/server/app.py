@@ -3670,11 +3670,12 @@ def start_news_backfill(limit=None, stale_days=None, force=False):
                "hubspot_missing": 0, "current": None, "log": [], "error": None,
                "started_at": now_iso(), "finished_at": None}
         NEWS_JOBS[job_id] = job
-    # queue size up front so the UI can show progress before the first result
+    # queue size up front so the UI can show progress before the first result —
+    # the same missing+stale selection (limit applied) the backfill itself uses
     with db_connect() as conn:
         try:
-            job["total"] = conn.execute(
-                "SELECT COUNT(*) FROM account_signals WHERE news_checked_at IS NULL").fetchone()[0]
+            job["total"] = len(N.db.domains_missing_news(conn, stale_days=stale_days,
+                                                         limit=limit))
         except sqlite3.Error:
             pass
 

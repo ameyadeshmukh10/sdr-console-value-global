@@ -342,14 +342,16 @@ def enabled_triggers(triggers=None):
 def _cross_context(trigger_id, prior):
     """The cross-reference line a wave-2 trigger appends about its upstream
     verdict. prior = the upstream trigger's classified verdict dict, or None
-    when the upstream trigger didn't run."""
+    when the upstream trigger didn't run. An upstream that errored or was
+    skipped gets NO line — only a completed scan may claim "found nothing",
+    otherwise a transport failure would wrongly suppress the searches."""
     if trigger_id == "license_audit":
         if prior and prior.get("found"):
             when = f", {prior['date']}" if prior.get("date") else ""
             return (f"\n   Cross-reference: our M&A carve-out scan already found: "
                     f"\"{prior.get('headline', '')}\"{when}. Count it as a signal — "
                     f"do not re-run those searches.")
-        if prior is not None:
+        if prior is not None and not prior.get("error") and "skipped" not in prior:
             return ("\n   Our M&A carve-out scan of the last 90 days found nothing — "
                     "do not re-run those searches.")
         return ""
@@ -809,6 +811,8 @@ def self_test():
                         "ebs_performance": {"label": "EBS performance", "skipped": "no EBS"}})
     xref_found = _cross_context("license_audit", v_found)
     xref_none = _cross_context("license_audit", v_none)
+    xref_err = _cross_context("license_audit", {**v_none, "error": "HTTP 500: boom"})
+    xref_skip = _cross_context("license_audit", {"label": "M&A carve-out", "skipped": "scoped out"})
     xref_mig = _cross_context("ebs_oci", {"found": True, "headline": "Moving to Fusion"})
 
     checks = [
@@ -844,6 +848,8 @@ def self_test():
         ("empty scan formats as the NO_NEWS literal", format_line({}) == NO_NEWS),
         ("license_audit cross-ref quotes the found M&A headline",
          "carve-out of FooCo" in xref_found and "found nothing" in xref_none),
+        ("an errored or skipped upstream never claims 'found nothing'",
+         xref_err == "" and xref_skip == ""),
         ("ebs_oci cross-ref warns about a full re-platform", "found=false" in xref_mig),
         ("EBS pre-condition: detected via tech_detail", _ebs_detected(_FIXTURE_TECH_EBS) is True),
         ("EBS pre-condition: Fusion-only scan is not EBS", _ebs_detected(_FIXTURE_TECH_FUSION) is False),
