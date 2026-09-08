@@ -244,9 +244,68 @@ triggers, via the Anthropic Messages API + server-side `web_search` (the same ch
 - **Cost gotcha (load-bearing):** every non-skipped scan is up to 5 web-search API
   calls — run first backfills with `--limit`, and remember the post-batch tail
   researches every new domain a batch touches.
-- **Not (yet) a copy consumer:** generation prompts do not read `news_signals`; the
-  data is for targeting/reporting until a copy play is designed for it (keep the
-  `import news_signals` lazy — boot rule — if you wire one).
+- **Copy consumer (2026-09):** the gated approval flow (section below) consumes the
+  verdicts — contacts approved through a trigger segment generate via
+  `generate_batch.py`'s **erp-trigger** path, which anchors email 1 on the stored
+  verdict. Autonomous (SLA) generation still ignores `news_signals`.
+
+## Gated approval flow — segments → review → enroll (added 2026-09)
+
+User-approved workflow change: manual list pulls + CSV uploads stop at TWO human gates;
+**SLA-sourced contacts bypass both** (fully autonomous, the pre-gate behavior). The Use /
+Replies / Analytics / Trends views are unchanged; Pipeline is the staged workflow and
+Outreach is the review surface.
+
+- **Contact columns** (`batch_db.py`, additive migration): `gated` (1 = in the approval
+  flow; set at insert via `upsert_contacts(rows, gated=True)` — `sdr_batches init
+  --gated`, `csv_audience.py ingest --gated`; `do_ingest` passes it for every non-SLA
+  source), `segment` + `account_approved_at` (stamped at the segment gate), `approved_at`
+  (stamped at the outreach gate). **`assign_batches` skips gated contacts until their
+  account is approved** — they sit batch-less in the segments screen. `status` values are
+  unchanged (pending/generated/enrolled/failed/skipped).
+- **Stage 2 — signal intelligence first:** after a gated ingest, `start_intel_job`
+  (app.py, `INTEL_JOBS`, single-flight) runs tech → hiring → news `backfill(domains=…)`
+  over every account awaiting review (cache-aware, so re-runs are cheap; unavailable
+  engines are recorded per-stage, never fatal). `POST /api/intel/run` re-kicks manually;
+  state rides on `GET /api/segments` + `GET /api/intel/status`.
+- **Stage 3-4 — segments:** `GET /api/segments` groups awaiting accounts by memberships
+  (every FOUND news trigger + `hiring` when sales roles exist + `no_signals`; an account
+  can be in several; `news_signals IS NULL` rows are `pending` research).
+  `POST /api/segments/approve {segments|domains|all}` stamps each approved account's
+  WINNING segment (highest-scoring selected trigger, else hiring, else no_signals; the
+  five trigger winners also get `variant='erp-trigger'`), batches the contacts
+  (`approve_accounts`), and auto-starts generation on the new batches
+  (`start_generate_job` now takes a LIST of batch ids — one job, sequential batches).
+  Approve-all pushes unresearched accounts through on the default path.
+- **Trigger-anchored generation:** `generate_batch.py` `ERP_PLAYS` (the five
+  user-approved Problem/Solution instruction sets) + `ERP_SYSTEM` (Value Global ERP Data
+  Retirement copywriter, NOT the EverWorker knowledge base) + `generate_contact_erp` —
+  **write-only, no web search** (the stored verdict from `news_detail` IS the research;
+  `_segment_verdict` fetches it). Email 1 opens on the trigger event; linter is
+  `lint_erp` (structural: 28-110 words, question in touch 1, breakup in touch 4, no
+  dashes/hype/pricing; NO metric requirement). Registered in `LINTERS['erp-trigger']`,
+  so ingest lint + re-lint route correctly; enrollment falls back to the persona
+  campaign (no erp-trigger Bison campaign env yet). A missing verdict (re-scan dropped
+  it) falls back to the default research path with default rules — never crashes. Both
+  the real-time path and Message-Batches (`prepare_batch_requests`) branch this way.
+- **Stage 5-6 — outreach gate:** `POST /api/outreach/<cid>/update {email?, linkedin?}`
+  applies a HUMAN edit to the generated asset (saved verbatim + `edited_at`/`edited_by`;
+  lint runs only for soft warnings; a complete edit re-promotes even a `failed` contact
+  to `generated` — human wins). `POST /api/outreach/approve {contact_ids|all}` stamps
+  `approved_at`. **Enrollment eligibility** = `status='generated'` AND (`gated=0` OR
+  `approved_at` set) — enforced in `sdr_batches cmd_enroll` via `db.enroll_eligible`;
+  `review_counts` feeds the Pipeline stage tiles + `enroll_ready`.
+- **UI:** Pipeline = `SegmentsPanel` (self-polling; approve buttons; hands the
+  generation job id to the existing `GenerateJobPanel`) → batch progress → review
+  banner → `EnrollPanel` ("N approved ready" + "M awaiting approval"). Outreach =
+  approval filter/column, row checkboxes + bulk approve, and `OutreachDetail` edit mode
+  (✎ Edit copy / Save / ✓ Approve for enrollment).
+- **Gotchas:** the server does a best-effort `init_schema` at boot (read-write, once) so
+  its read-only queries never hit missing approval columns; `db_contact_meta` also
+  falls back to the old SELECT. Approval writes go through batch_db in-process
+  (`retry_locked`, the detect-engine pattern) — never hold them across network calls.
+  There is deliberately NO env kill-switch: "Approve all" is the escape hatch if a
+  backlog must flow through un-reviewed.
 
 ## Signal notes contact write-back (added 2026-08)
 

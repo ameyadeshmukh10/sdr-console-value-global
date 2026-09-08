@@ -33,10 +33,17 @@ npm --prefix webui/frontend run dev              # dev server with /api proxy
    (see *Clay buying-group enrichment* below). A **CSV Upload** panel turns an uploaded
    contact CSV into a named audience batched straight into the pipeline (see *CSV audiences*
    below). Copy generation happens on the Pipeline tab or via `/sdr-batches` in Claude Code.
-2. **Pipeline** (`/pipeline`) — **real-time batch progress** (polls `/api/progress`
-   every 2.5s with an auto-refresh toggle) while `/sdr-batches` runs in Claude Code,
-   plus **enrollment with a dry-run gate**: preview the planned routing first, then a
-   confirm modal before the live write to Bison (`sdr_batches.py enroll`).
+2. **Pipeline** (`/pipeline`) — the **staged gated workflow**. Manual list pulls and CSV
+   uploads stop at two human gates (SLA-sourced contacts skip both and flow as before):
+   **1 · Signal segments** — after ingest, signal intelligence (tech + hiring + the 5 ERP
+   news triggers) researches the pulled ACCOUNTS; they appear grouped by the signals
+   found (M&A carve-out, ERP migration, license audit, EBS on OCI, EBS performance,
+   hiring, no signals) and you approve segments (or all) — approval batches those
+   contacts and auto-starts copy generation (trigger segments write trigger-anchored
+   ERP Data Retirement copy). **2 · Batch progress** (polls `/api/progress` every 2.5s).
+   **3 · Review** — generated copy waits on the Outreach tab for editing/approval.
+   **4 · Enrollment with a dry-run gate** — only APPROVED copy (plus autonomous SLA
+   contacts) enrolls: preview the routing, then a confirm modal before the live write.
 3. **Orchestration** (`/diagram`) — SVG of HubSpot → 4 persona sub-agents → Bison
    campaigns 10–13, with live contact counts. Campaign stats overlay when a cached
    snapshot exists for that campaign id.
@@ -48,7 +55,12 @@ npm --prefix webui/frontend run dev              # dev server with /api proxy
    `interested-trends` analysis. **Refresh** re-runs `fetch_interested_replies.py` +
    the `analyze_*.py` chain.
 6. **Outreach** (`/outreach`) — search/filter/group the generated sequences by persona,
-   CTA play, status, company; click any lead for the full 4-touch email + LinkedIn copy.
+   CTA play, status, approval state, company; click any lead for the full 4-touch email +
+   LinkedIn copy. This is also the **review gate**: **✎ Edit copy** rewrites any
+   subject/body/LinkedIn touch in place (the human edit is saved verbatim — lint only
+   surfaces soft style notes, and a complete edit re-promotes a lint-failed contact),
+   and gated copy is approved per contact, per selection, or all at once before
+   enrollment can touch it.
 
 7. **Replies** (`/replies`) — unified interested-reply triage across **email (Bison)** and
    **LinkedIn (HeyReach)**, with a channel badge on every card and a channel filter. **Scan**

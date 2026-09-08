@@ -4,10 +4,13 @@ import { Stat, Spinner, ErrorBanner, Badge, num } from '../components/ui.jsx'
 import EnrollPanel from '../components/EnrollPanel.jsx'
 import GenerateJobPanel from '../components/GenerateJobPanel.jsx'
 import BatchJobPanel from '../components/BatchJobPanel.jsx'
+import SegmentsPanel from '../components/SegmentsPanel.jsx'
 
-// Pipeline — live batch progress + UI-triggered copy generation (Anthropic API)
-// + the enrollment gate. Generation runs as a background job; the DB-backed
-// progress view and the per-contact job panel update live.
+// Pipeline — the staged gated workflow: (1) signal segments to approve
+// (SegmentsPanel: intel progress + account approval, which auto-starts
+// generation), (2) live batch generation progress, (3) outreach review counts
+// (the editing/approval itself lives on the Outreach tab), (4) enrollment of
+// approved copy. SLA-sourced contacts skip the gates and flow as before.
 const POLL_MS = 2500
 
 // Instruction-set variants to A/B test (must match the backend WRITE_RULES keys).
@@ -62,6 +65,7 @@ export default function PipelinePage() {
   const pending = bstat.pending || 0
   const pctDone = total ? Math.round((100 * done) / total) : 0
   const cstat = prog?.contacts_by_status || {}
+  const review = prog?.review || {}
 
   return (
     <div>
@@ -83,9 +87,11 @@ export default function PipelinePage() {
 
       {!prog ? <Spinner label="Loading…" /> : (
         <>
+          <SegmentsPanel onChanged={poll} onGeneration={(id) => setJobId(id)} />
+
           <div className="panel feature" style={{ marginBottom: 20 }}>
             <div className="row between" style={{ marginBottom: 10 }}>
-              <span className="section-h" style={{ margin: 0 }}>Batch progress</span>
+              <span className="section-h" style={{ margin: 0 }}>2 · Batch generation progress</span>
               <span className="muted" style={{ fontSize: 12 }}>
                 {auto ? <span className="row" style={{ gap: 6 }}><span className="spinner" />live</span> : 'paused'}
                 {lastTick && ` · updated ${lastTick.toLocaleTimeString()}`}
@@ -101,11 +107,21 @@ export default function PipelinePage() {
           </div>
 
           <div className="grid stat-grid" style={{ marginBottom: 22 }}>
-            <Stat label="Pending" value={num(cstat.pending || 0)} sub="awaiting generation" />
-            <Stat label="Generated" value={num(cstat.generated || 0)} sub="ready to enroll" accent />
+            <Stat label="Awaiting segment OK" value={num(review.awaiting_account || 0)} sub="approve above" tone={review.awaiting_account ? 'warn' : undefined} />
+            <Stat label="Pending generation" value={num(cstat.pending || 0)} sub="approved or autonomous" />
+            <Stat label="Awaiting copy review" value={num(review.awaiting_outreach_approval || 0)} sub="review on the Outreach tab" tone={review.awaiting_outreach_approval ? 'warn' : undefined} />
+            <Stat label="Ready to enroll" value={num(prog.enroll_ready ?? cstat.generated ?? 0)} sub="approved + autonomous" accent />
             <Stat label="Enrolled" value={num(cstat.enrolled || 0)} tone="good" />
             <Stat label="Skipped / failed" value={num((cstat.skipped || 0) + (cstat.failed || 0))} tone="warn" />
           </div>
+
+          {(review.awaiting_outreach_approval || 0) > 0 && (
+            <div className="banner info" style={{ marginBottom: 22 }}>
+              3 · <b>{num(review.awaiting_outreach_approval)}</b> generated sequence{review.awaiting_outreach_approval === 1 ? '' : 's'} awaiting
+              your review — open the <b>Outreach</b> tab to read, edit, and approve them (per contact or in bulk).
+              Enrollment below only touches approved copy.
+            </div>
+          )}
 
           <div className="panel" style={{ marginBottom: 22 }}>
             <div className="row between" style={{ marginBottom: 10 }}>
@@ -191,7 +207,8 @@ export default function PipelinePage() {
           <BatchJobPanel pendingBatches={pending} variant={variant}
             split={splitMode ? split : null} splitValid={splitValid} onChanged={poll} />
 
-          <EnrollPanel generatedReady={prog.generated_ready} onChanged={poll} />
+          <EnrollPanel generatedReady={prog.enroll_ready ?? prog.generated_ready}
+            awaitingApproval={review.awaiting_outreach_approval || 0} onChanged={poll} />
         </>
       )}
     </div>

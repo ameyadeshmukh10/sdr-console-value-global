@@ -47,14 +47,15 @@ def cmd_init(args):
         conn = db.connect()
         try:
             db.init_schema(conn)
-            added = db.upsert_contacts(conn, rows)
+            added = db.upsert_contacts(conn, rows, gated=args.gated)
             made = db.assign_batches(conn, args.batch_size)
             return added, made, db.counts(conn)
         finally:
             conn.close()
 
     added, made, c = db.retry_locked(_run)
-    print(f"init: +{added} new contacts, +{made} new batches (size {args.batch_size})")
+    gtag = " [gated: awaiting segment approval]" if args.gated else ""
+    print(f"init: +{added} new contacts, +{made} new batches (size {args.batch_size}){gtag}")
     print(f"total contacts: {c['total_contacts']} | batches: {c['batches_by_status']}")
     return 0
 
@@ -197,9 +198,15 @@ def cmd_setup_variant_campaigns(args):
 def cmd_enroll(args):
     import os
     conn = db.connect()
-    rows = db.contacts_by_status(conn, "generated")
+    db.init_schema(conn)  # approval columns must exist before the gate query
+    # Outreach gate: gated contacts enroll only after their copy is approved
+    # (approved_at); autonomous (SLA-sourced) contacts enroll as before.
+    rows = db.enroll_eligible(conn)
+    awaiting = db.review_counts(conn).get("awaiting_outreach_approval", 0)
+    if awaiting:
+        print(f"note: {awaiting} generated contact(s) awaiting outreach approval — not enrolling those.")
     if not rows:
-        print("nothing to enroll (no 'generated' contacts).")
+        print("nothing to enroll (no approved or autonomous 'generated' contacts).")
         return 0
     # HeyReach (LinkedIn) is a single campaign for everyone; enabled when both env
     # vars are set. Bison is the email channel (per-variant campaigns).
@@ -516,7 +523,7 @@ def cmd_notes_backfill(args):
 def main():
     ap = argparse.ArgumentParser(description="SDR batch pipeline")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("init"); p.add_argument("--from", dest="src"); p.add_argument("--batch-size", type=int, default=25); p.set_defaults(func=cmd_init)
+    p = sub.add_parser("init"); p.add_argument("--from", dest="src"); p.add_argument("--batch-size", type=int, default=25); p.add_argument("--gated", action="store_true", help="insert into the human-approval flow (segment gate before batching)"); p.set_defaults(func=cmd_init)
     sub.add_parser("status").set_defaults(func=cmd_status)
     p = sub.add_parser("pending-batches"); p.add_argument("--limit", type=int, default=0); p.set_defaults(func=cmd_pending_batches)
     p = sub.add_parser("get-batch"); p.add_argument("batch_id", type=int); p.set_defaults(func=cmd_get_batch)

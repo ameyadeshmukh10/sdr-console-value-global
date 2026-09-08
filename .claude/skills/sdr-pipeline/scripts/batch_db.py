@@ -55,6 +55,14 @@ def retry_locked(fn, attempts=5, base_delay=1.0):
 
 def init_schema(conn):
     conn.executescript("""
+    -- Approval-flow columns (gated pipeline, 2026-09): manual list pulls + CSV
+    -- uploads insert with gated=1 and wait for TWO human gates — (1) the account
+    -- (segment) gate: account_approved_at + segment are stamped when the user
+    -- approves the account's signal segment, which also makes the contact
+    -- batchable (assign_batches skips gated contacts until then); (2) the
+    -- outreach gate: approved_at is stamped when the user approves the
+    -- generated copy, which makes the contact enrollable. SLA-sourced contacts
+    -- stay gated=0 (fully autonomous, the pre-gate behavior).
     CREATE TABLE IF NOT EXISTS contacts (
         contact_id  TEXT PRIMARY KEY,
         first_name  TEXT, last_name TEXT, email TEXT, title TEXT, company TEXT,
@@ -62,7 +70,11 @@ def init_schema(conn):
         batch_id    INTEGER,
         status      TEXT DEFAULT 'pending',
         error       TEXT,
-        updated_at  TEXT
+        updated_at  TEXT,
+        gated       INTEGER DEFAULT 0,
+        segment     TEXT,
+        account_approved_at TEXT,
+        approved_at TEXT
     );
     CREATE TABLE IF NOT EXISTS batches (
         batch_id     INTEGER PRIMARY KEY,
@@ -178,6 +190,12 @@ def init_schema(conn):
         conn.execute("ALTER TABLE contacts ADD COLUMN domain TEXT")
     if "variant" not in cols:
         conn.execute("ALTER TABLE contacts ADD COLUMN variant TEXT")
+    # approval-flow columns (additive; pre-gate rows read as gated=0 = autonomous)
+    if "gated" not in cols:
+        conn.execute("ALTER TABLE contacts ADD COLUMN gated INTEGER DEFAULT 0")
+    for col in ("segment", "account_approved_at", "approved_at"):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE contacts ADD COLUMN {col} TEXT")
     # Gate the backfill behind a read: the UPDATE grabs the single WAL write
     # slot even when it changes nothing, and init_schema runs from every
     # subprocess entrypoint — unconditional, it starves against the server's
@@ -200,31 +218,38 @@ def init_schema(conn):
     conn.commit()
 
 
-def upsert_contacts(conn, rows):
+def upsert_contacts(conn, rows, gated=False):
     """Insert new contacts (ignore existing). Returns count of newly inserted.
 
     A row may carry an explicit `domain` (e.g. a CSV upload's company-website
     domain, more accurate than a personal mailbox's); otherwise the email domain
-    is used — it keys the account_signals research/tech/hiring caches."""
+    is used — it keys the account_signals research/tech/hiring caches.
+    gated=True inserts rows into the human-approval flow (see the schema
+    comment): they stay unbatched until their account's segment is approved."""
     before = conn.execute("SELECT COUNT(*) FROM contacts").fetchone()[0]
     conn.executemany("""
         INSERT OR IGNORE INTO contacts
-          (contact_id, first_name, last_name, email, title, company, linkedin_url, persona, domain, variant, status, updated_at)
-        VALUES (:contact_id,:first_name,:last_name,:email,:title,:company,:linkedin_url,:persona,:domain,:variant,'pending',:ts)
+          (contact_id, first_name, last_name, email, title, company, linkedin_url, persona, domain, variant, gated, status, updated_at)
+        VALUES (:contact_id,:first_name,:last_name,:email,:title,:company,:linkedin_url,:persona,:domain,:variant,:gated,'pending',:ts)
     """, [{"variant": None, **r,
-           "domain": r.get("domain") or email_domain(r.get("email")), "ts": now()} for r in rows])
+           "domain": r.get("domain") or email_domain(r.get("email")),
+           "gated": 1 if gated else 0, "ts": now()} for r in rows])
     conn.commit()
     return conn.execute("SELECT COUNT(*) FROM contacts").fetchone()[0] - before
 
 
 def assign_batches(conn, batch_size=25):
-    """Group any unbatched contacts into batches of `batch_size`. Returns new batch count.
+    """Group any unbatched, batchable contacts into batches of `batch_size`.
+    Returns new batch count. Gated contacts are batchable only once their
+    account is approved (account_approved_at set) — until then they wait in
+    the segments screen.
 
     Ordered by domain so contacts from the same company land in the same batch —
     one web search then covers all of them (and feeds the signal cache).
     """
     unbatched = [r["contact_id"] for r in
                  conn.execute("SELECT contact_id FROM contacts WHERE batch_id IS NULL "
+                              "AND (COALESCE(gated,0)=0 OR account_approved_at IS NOT NULL) "
                               "ORDER BY domain, rowid")]
     next_bid = (conn.execute("SELECT COALESCE(MAX(batch_id),0) FROM batches").fetchone()[0]) + 1
     made = 0
@@ -240,7 +265,7 @@ def assign_batches(conn, batch_size=25):
 
 def get_batch(conn, batch_id):
     return [dict(r) for r in conn.execute(
-        "SELECT contact_id, first_name, last_name, email, title, company, linkedin_url, persona, domain, variant "
+        "SELECT contact_id, first_name, last_name, email, title, company, linkedin_url, persona, domain, variant, segment "
         "FROM contacts WHERE batch_id=? ORDER BY domain, rowid", (batch_id,))]
 
 
@@ -273,6 +298,90 @@ def counts(conn):
              conn.execute("SELECT status, COUNT(*) n FROM batches GROUP BY status")}
     total = conn.execute("SELECT COUNT(*) FROM contacts").fetchone()[0]
     return {"total_contacts": total, "contacts_by_status": cstat, "batches_by_status": bstat}
+
+
+# ---- approval flow (gated pipeline) ---------------------------------------
+def gated_unapproved_accounts(conn):
+    """Accounts (domains) still waiting at the segment gate: gated contacts with
+    no account approval yet, grouped by domain. Returns
+    [{domain, company, contacts}], most contacts first."""
+    return [dict(r) for r in conn.execute(
+        "SELECT domain, MAX(company) company, COUNT(*) contacts FROM contacts "
+        "WHERE COALESCE(gated,0)=1 AND account_approved_at IS NULL "
+        "AND domain IS NOT NULL AND domain != '' "
+        "GROUP BY domain ORDER BY COUNT(*) DESC, domain")]
+
+
+def approve_accounts(conn, approvals):
+    """Approve accounts at the segment gate. approvals = [{domain, segment,
+    variant|None}] — stamps account_approved_at + the winning segment on every
+    still-unapproved gated contact at those domains (and the generation variant
+    when the segment carries one, e.g. 'erp-trigger'), then batches them.
+    Returns {contacts, batches, batch_ids}."""
+    ts = now()
+    total = 0
+    for a in approvals:
+        cur = conn.execute(
+            "UPDATE contacts SET account_approved_at=?, segment=?, "
+            "variant=COALESCE(?, variant), updated_at=? "
+            "WHERE COALESCE(gated,0)=1 AND account_approved_at IS NULL AND domain=?",
+            (ts, a.get("segment"), a.get("variant"), ts, a["domain"]))
+        total += cur.rowcount
+    conn.commit()
+    before = conn.execute("SELECT COALESCE(MAX(batch_id),0) FROM batches").fetchone()[0]
+    made = assign_batches(conn)
+    return {"contacts": total, "batches": made,
+            "batch_ids": list(range(before + 1, before + made + 1))}
+
+
+def approve_outreach(conn, contact_ids=None):
+    """Approve generated copy at the outreach gate: stamps approved_at on gated
+    'generated' contacts (all of them when contact_ids is None). Returns the
+    number approved."""
+    ts = now()
+    if contact_ids is None:
+        cur = conn.execute(
+            "UPDATE contacts SET approved_at=?, updated_at=? "
+            "WHERE COALESCE(gated,0)=1 AND status='generated' AND approved_at IS NULL",
+            (ts, ts))
+    else:
+        ids = [str(c) for c in contact_ids]
+        if not ids:
+            return 0
+        qmarks = ",".join("?" * len(ids))
+        cur = conn.execute(
+            f"UPDATE contacts SET approved_at=?, updated_at=? "
+            f"WHERE COALESCE(gated,0)=1 AND status='generated' AND approved_at IS NULL "
+            f"AND contact_id IN ({qmarks})", (ts, ts, *ids))
+    conn.commit()
+    return cur.rowcount
+
+
+def enroll_eligible(conn):
+    """Contacts enrollment may touch: 'generated' AND past the outreach gate
+    (autonomous contacts have no gate; gated ones need approved_at). Same row
+    shape as contacts_by_status."""
+    return [dict(r) for r in conn.execute(
+        "SELECT * FROM contacts WHERE status='generated' "
+        "AND (COALESCE(gated,0)=0 OR approved_at IS NOT NULL) "
+        "ORDER BY batch_id, rowid")]
+
+
+def review_counts(conn):
+    """Stage rollup for the gated flow (plus the autonomous lane), for the
+    Pipeline view's staged UI and the enroll gate's badge."""
+    row = conn.execute("""
+        SELECT
+          SUM(CASE WHEN g=1 AND account_approved_at IS NULL THEN 1 ELSE 0 END) awaiting_account,
+          SUM(CASE WHEN g=1 AND account_approved_at IS NOT NULL AND status='pending' THEN 1 ELSE 0 END) approved_for_generation,
+          SUM(CASE WHEN g=1 AND status='generated' AND approved_at IS NULL THEN 1 ELSE 0 END) awaiting_outreach_approval,
+          SUM(CASE WHEN g=1 AND status='generated' AND approved_at IS NOT NULL THEN 1 ELSE 0 END) approved_ready,
+          SUM(CASE WHEN g=0 AND status='generated' THEN 1 ELSE 0 END) autonomous_generated
+        FROM (SELECT COALESCE(gated,0) g, account_approved_at, approved_at, status FROM contacts)
+    """).fetchone()
+    out = {k: int(row[k] or 0) for k in row.keys()}
+    out["enroll_ready"] = out["approved_ready"] + out["autonomous_generated"]
+    return out
 
 
 # ---- per-company signal cache --------------------------------------------

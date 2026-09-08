@@ -196,6 +196,247 @@ def _today():
     return {"today": now.strftime("%B %d, %Y"), "year": now.year, "prev_year": now.year - 1}
 
 
+# ----------------------------------------------------------------------------
+# ERP Data Retirement trigger-anchored generation (Value Global segment flow).
+# Contacts approved through a news-trigger segment carry variant "erp-trigger"
+# + a `segment` (one of the five ERP trigger ids); their copy is written from
+# the stored trigger VERDICT (news_signals.py research) + the sales play below
+# — write-only, no web search: the research already happened at the account
+# gate. Play problem/solution texts are the user-approved instruction sets.
+# ----------------------------------------------------------------------------
+ERP_VARIANT = "erp-trigger"
+
+ERP_PLAYS = {
+    "ma_carveout": {
+        "label": "M&A carve-out",
+        "problem": "When a company divests or acquires, the separated entity keeps running on the "
+                   "parent's ERP through a 6-12 month Transition Services Agreement window. TSA data "
+                   "is messy and commingled, nobody wants to keep running and paying for two ERPs, "
+                   "and the clock to separate the data cleanly started the day the deal was announced.",
+        "solution": "ERP Data Retirement helps the separated entity extract, segregate, and retire or "
+                    "archive its data clean, so it can stand up independently on its own ERP instance "
+                    "(or move to a new system) before the TSA window closes.",
+        "opener": "the deal itself (the divestiture / carve-out / spinoff / acquisition found), tied "
+                  "to the TSA and data-separation clock it starts",
+    },
+    "erp_migration": {
+        "label": "ERP migration",
+        "problem": "They are moving to a SaaS ERP (Fusion Cloud / S/4HANA), but the new platform only "
+                   "accepts open items and recent data. Twenty years of legacy transactional history "
+                   "will not load, yet it stays under audit, tax, and legal-retention obligations once "
+                   "the old system is switched off, and no implementation partner wants to own that "
+                   "question.",
+        "solution": "ERP Data Retirement extracts and archives the full legacy history into a "
+                    "compliant, independently queryable archive that lives outside the new ERP, so "
+                    "they can retire the old system entirely, satisfy retention and audit "
+                    "requirements, and go live on the new platform clean.",
+        "opener": "their ERP modernization program (platform and stage when known), tied to the "
+                  "legacy-history question the new platform will not take",
+    },
+    "license_audit": {
+        "label": "License audit",
+        "problem": "When Oracle's audit clock starts, the company is exposed on every database, "
+                   "module, and environment where retired or dormant data still lives. Non-production "
+                   "copies, old modules, and aged history all count toward the license and support "
+                   "bill they are defending; the bigger the live footprint at audit time, the bigger "
+                   "the liability.",
+        "solution": "ERP Data Retirement compresses the Oracle footprint before the audit closes: "
+                    "retiring inactive data and decommissioning dormant modules and environments so "
+                    "there is less to license, less to defend, and a smaller support renewal. They "
+                    "walk into the audit with a lean, justifiable footprint instead of a sprawling "
+                    "one.",
+        "opener": "the audit-exposure signal found (the M&A event, the SAM/procurement hire, or the "
+                  "Oracle-spend commentary), tied to what still counts toward an audit",
+    },
+    "ebs_oci": {
+        "label": "EBS on OCI",
+        "problem": "They lifted EBS onto OCI, but they are still paying full Oracle license and "
+                   "support, and full cloud compute and storage, to host 20 years of history, most of "
+                   "which is dormant and never queried. They moved the problem to the cloud instead "
+                   "of shrinking it, so the cloud bill carries the full weight of data that only "
+                   "exists for compliance.",
+        "solution": "ERP Data Retirement retires the dormant history off the live OCI instance into a "
+                    "low-cost compliant archive, cutting the licensed, supported, and hosted "
+                    "footprint by up to ~80%, so they pay cloud rates only for the data they actually "
+                    "use, while retained history stays accessible for audit and legal hold.",
+        "opener": "their EBS-on-OCI move (the lift-and-shift found), tied to still paying full "
+                  "freight on dormant history",
+    },
+    "ebs_performance": {
+        "label": "EBS performance",
+        "problem": "Two decades of accumulated transactional data is bloating the production EBS "
+                   "database. Large tables mean commit failures, table locks, and batch jobs that "
+                   "overrun, dragging out the month-end close and forcing a cycle of hardware "
+                   "upgrades and tuning just to keep the same processes running. The data they never "
+                   "use is slowing down the data they do.",
+        "solution": "ERP Data Retirement moves aged, inactive transactions out of the live tables "
+                    "into an archive, shrinking the working set so month-end batch runs faster, locks "
+                    "and commit failures drop, and the close tightens, recovering performance without "
+                    "buying more hardware or re-architecting the system.",
+        "opener": "running EBS at their scale and data age (plus any tuning/DBA proxy found), tied to "
+                  "month-end close and batch performance; never claim to know their close is slow, "
+                  "pose it as the question",
+    },
+}
+
+ERP_SYSTEM = """\
+You are an expert B2B SDR copywriter for Value Global's ERP Data Retirement offering.
+
+# What we sell (ground truth — never invent beyond this)
+Value Global's ERP Data Retirement extracts, archives, and retires legacy ERP data (Oracle
+E-Business Suite and similar estates): aged and dormant records move out of the live system into a
+low-cost, compliant, independently queryable archive that satisfies audit, tax, and legal-retention
+obligations. That lets companies shrink licensed Oracle footprints, retire old systems entirely,
+separate data cleanly after M&A, and recover month-end performance, without losing access to
+history.
+
+# Your task
+You are GIVEN a VERIFIED buying trigger researched for this account (with its source and date),
+plus the sales play for that trigger. Do NOT search the web. Write a 4-touch cold EMAIL sequence
+plus 3 LinkedIn touches anchored on that trigger.
+
+# Write rules
+- 45-90 words per email. One or two short paragraphs separated by a blank line. ONE idea per email.
+- Touch 1 opens on the trigger event (name what actually happened, with its month/date when given),
+  makes the play's problem concrete for THEIR situation in one or two lines, and ends with ONE
+  soft, open question. No meeting ask and no product pitch in touch 1.
+- Touch 2: one level deeper on the cost or risk of doing nothing (the play's problem), then
+  introduce in plain words what ERP Data Retirement does about it (the play's solution). End on a
+  soft question or a light offer to share how similar companies handled it.
+- Touch 3: a short, specific meeting ask: 20 minutes to walk through what the archive / separation /
+  footprint compression would look like for their estate. Concrete, no hype.
+- Touch 4: a genuine one-line breakup. No guilt, leave the door open.
+- The trigger verdict and the play are your ONLY facts about this company (plus a tech-stack line
+  when provided). Never invent numbers, dates, names, or internal details. The ~80%
+  footprint-reduction figure may be used ONLY when the play itself states it.
+- No em or en dashes. NO sign-off or trailing name. No hype words (revolutionary, game-changing,
+  cutting-edge, seamless, supercharge, unlock, transform). Never put pricing in a cold email. Vary
+  how each email opens; do not start them all the same way.
+- LinkedIn: li_connect is a <=280-char connection note referencing the trigger (no pitch);
+  li_msg1/li_msg2 are short, value-first follow-ups.
+- Set the `signal` JSON field to the trigger finding with its month/date.
+
+""" + OUTPUT_SCHEMA
+
+
+def build_erp_user(contact, segment, verdict, tech_line=None, prior_issues=None):
+    play = ERP_PLAYS[segment]
+    details = verdict.get("details") or {}
+    base = (
+        f"Contact:\n"
+        f"- name: {contact.get('first_name','')} {contact.get('last_name','')}\n"
+        f"- title: {contact.get('title','')}\n"
+        f"- company: {contact.get('company','')}\n"
+        f"- email domain: {contact.get('domain') or db.email_domain(contact.get('email'))}\n\n"
+        f"# Verified buying trigger: {play['label']} (research confidence {verdict.get('score', 0)}/100)\n"
+        f"- What we found: {verdict.get('headline','')}"
+        + (f" ({verdict['date']})" if verdict.get("date") else "") + "\n"
+        + (f"- Evidence: {verdict['summary']}\n" if verdict.get("summary") else "")
+        + (f"- Details: {json.dumps(details, ensure_ascii=False)}\n" if details else "")
+        + (f"- Source: {verdict['source_url']}\n" if verdict.get("source_url") else "")
+        + "\n# The sales play\n"
+        f"- The problem this creates for them: {play['problem']}\n"
+        f"- What ERP Data Retirement does about it: {play['solution']}\n"
+        f"- Email 1 opens on: {play['opener']}\n"
+    )
+    if tech_line:
+        base += (f"\nCompany tech stack (deterministic scan; reliable): {tech_line}\n"
+                 "Background context only — never present it as news or say we scanned them.\n")
+    base += "\nUse the contact's first name in the copy. Write the sequence. Return only the JSON object."
+    if prior_issues:
+        base += ("\n\nYour previous attempt FAILED these checks:\n- "
+                 + "\n- ".join(prior_issues)
+                 + "\nFix ALL of them. Return only the corrected JSON object.")
+    return base
+
+
+def erp_signal_line(segment, verdict):
+    """The auditable `signal` string stored on the asset (mirrors the cached-
+    signal format): trigger label + headline + date."""
+    play = ERP_PLAYS.get(segment) or {}
+    line = f"{play.get('label', segment)}: {verdict.get('headline', '')}".strip().rstrip(":")
+    if verdict.get("date"):
+        line += f" ({verdict['date']})"
+    return line
+
+
+def lint_erp(email):
+    """Structural checks for the ERP trigger sequence: length band, no dashes /
+    sign-off / pricing / hype, soft question in touch 1, breakup in touch 4.
+    No metric requirement — the trigger verdict is the anchor, not proof stats."""
+    return _lint_short(email, lo=28, hi=110)
+
+
+def _segment_verdict(domain, segment):
+    """The stored news-trigger verdict for (domain, segment), or None when the
+    account has no found verdict for it (e.g. a re-scan dropped it)."""
+    if not domain or segment not in ERP_PLAYS:
+        return None
+    conn = db.connect()
+    try:
+        row = db.get_signal(conn, domain)
+    finally:
+        conn.close()
+    try:
+        triggers = (json.loads((row or {}).get("news_detail") or "{}") or {}).get("triggers") or {}
+    except (ValueError, TypeError):
+        return None
+    v = triggers.get(segment)
+    return v if isinstance(v, dict) and v.get("found") else None
+
+
+def generate_contact_erp(contact, segment, verdict, client, write=True, tech_line=None):
+    """Generate one trigger-anchored contact (write-only, no web search — the
+    verdict IS the research). Same retry/lint/write contract as
+    generate_contact; the asset carries variant 'erp-trigger'."""
+    cid, persona = contact["contact_id"], contact.get("persona", "sales-leadership")
+    signal = erp_signal_line(segment, verdict)
+    issues, last_asset = ["no output"], None
+    cache_read = cache_write = 0
+
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            res = client.complete(
+                ERP_SYSTEM,
+                build_erp_user(contact, segment, verdict, tech_line=tech_line,
+                               prior_issues=None if attempt == 1 else issues),
+                use_web_search=False, max_tokens=4096,
+            )
+            u = res.get("usage", {})
+            cache_read += u.get("cache_read_input_tokens", 0) or 0
+            cache_write += u.get("cache_creation_input_tokens", 0) or 0
+        except AnthropicError as e:
+            issues = [f"api error: {e}"]
+            continue
+        try:
+            data = extract_json(res["text"])
+        except AnthropicJSONError:
+            issues = ["model did not return valid JSON"]
+            continue
+
+        last_asset = {
+            "contact_id": cid, "persona": persona, "variant": ERP_VARIANT,
+            "segment": segment, "signal": signal,
+            "email": data.get("email", {}) or {},
+            "linkedin": data.get("linkedin", {}) or {},
+        }
+        issues = lint_erp(last_asset["email"])
+        if not issues:
+            if write:
+                _atomic_write(cid, last_asset)
+            return {"status": "linted", "signal": signal, "asset": last_asset,
+                    "company": contact.get("company", ""), "web_searches": 0,
+                    "attempts": attempt, "issues": [],
+                    "cache_read": cache_read, "cache_write": cache_write}
+
+    if write and last_asset is not None:
+        _atomic_write(cid, last_asset)
+    return {"status": "failed", "asset": last_asset, "signal": signal,
+            "company": contact.get("company", ""), "web_searches": 0,
+            "attempts": MAX_ATTEMPTS, "issues": issues,
+            "cache_read": cache_read, "cache_write": cache_write}
+
+
 # Write-only preamble: the signal is provided (from the cache), so no web search. The chosen variant's
 # write rules (above) are appended after this.
 WRITE_PREAMBLE = """\
@@ -408,7 +649,8 @@ def lint_show(email):
     return _lint_short(email, require_give=_SHOW_GIVE)
 
 
-LINTERS = {"value-give": lint_email, "earn": lint_earn, "show": lint_show}
+LINTERS = {"value-give": lint_email, "earn": lint_earn, "show": lint_show,
+           ERP_VARIANT: lint_erp}
 
 
 def lint_assets(asset):
@@ -618,11 +860,26 @@ def _cached_hiring(domain):
 def generate_one(contact, knowledge, client, write=True, variant=DEFAULT_VARIANT):
     """Cache-aware single-contact generation.
 
-    Reuse a fresh per-company signal (write-only, no web search). On a cache miss
-    research once per company under a per-domain lock, then store the signal so the
-    rest of that company (and future runs within 90 days) skip the search.
+    Segment-approved trigger contacts (variant 'erp-trigger' / segment in
+    ERP_PLAYS) write from their stored trigger verdict — no web search, no
+    signal cache. Everyone else: reuse a fresh per-company signal (write-only),
+    else research once per company under a per-domain lock and cache it.
     """
     domain = (contact.get("domain") or db.email_domain(contact.get("email")))
+
+    seg = (contact.get("segment") or "").strip()
+    if contact.get("variant") == ERP_VARIANT or seg in ERP_PLAYS:
+        verdict = _segment_verdict(domain, seg)
+        if verdict:
+            r = generate_contact_erp(contact, seg, verdict, client, write=write,
+                                     tech_line=_cached_tech(domain)[0])
+            r["used_cache"] = True  # verdict-anchored: zero research spend
+            return r
+        # verdict gone (news re-scan no longer finds the trigger): fall back to
+        # the default research path with the default style rules
+        sys.stderr.write(f"[generate] no stored {seg!r} verdict for {domain} — "
+                         f"falling back to the default path\n")
+        variant = DEFAULT_VARIANT
 
     cached = _fresh_cached_signal(domain)
     if cached:
@@ -763,14 +1020,34 @@ def build_request_params(contact, knowledge, client, cached_signal=None, variant
 
 def prepare_batch_requests(contacts, knowledge, client=None, variant=DEFAULT_VARIANT):
     """Build {custom_id, params} for each contact + a manifest for result handling.
-    Already-cached companies become cheap write-only requests (no web search)."""
+    Already-cached companies become cheap write-only requests (no web search);
+    segment-approved trigger contacts become verdict-anchored write-only
+    requests through the ERP system prompt."""
     client = client or AnthropicClient()
     requests, manifest = [], {}
     for c in contacts:
         cid = str(c["contact_id"])
         domain = c.get("domain") or db.email_domain(c.get("email"))
+        seg = (c.get("segment") or "").strip()
+        if c.get("variant") == ERP_VARIANT or seg in ERP_PLAYS:
+            verdict = _segment_verdict(domain, seg)
+            if verdict:
+                tech_line, _ = _cached_tech(domain)
+                requests.append({"custom_id": cid, "params": client.build_body(
+                    ERP_SYSTEM, build_erp_user(c, seg, verdict, tech_line=tech_line),
+                    use_web_search=False, max_tokens=4096, cache_ttl="1h")})
+                # cached_signal = the verdict line, so process_batch_result stores
+                # it verbatim and never re-caches it as a researched signal
+                manifest[cid] = {"contact": c, "domain": domain, "variant": ERP_VARIANT,
+                                 "segment": seg, "was_combined": False,
+                                 "cached_signal": erp_signal_line(seg, verdict)}
+                continue
+            sys.stderr.write(f"[generate] no stored {seg!r} verdict for {domain} — "
+                             f"batching {cid} through the default path\n")
         cached = _fresh_cached_signal(domain)
         cvariant = c.get("variant") or variant  # per-contact split wins over run-level
+        if cvariant == ERP_VARIANT:
+            cvariant = DEFAULT_VARIANT  # verdict gone: default rules, not the ERP linter
         tech_line, tech_playbook = _cached_tech(domain)
         requests.append({"custom_id": cid,
                          "params": build_request_params(c, knowledge, client, cached_signal=cached,

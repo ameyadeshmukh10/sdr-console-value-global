@@ -75,6 +75,28 @@ python3 $P/sdr_batches.py notes-backfill              # LIVE one-time backfill o
 **Contact status:** `pending → generated → enrolled` (or `failed` with the lint reason).
 Re-running only picks up unfinished work.
 
+### The gated approval flow (console pulls + CSV uploads)
+
+Pulls started from the **console** (Use view list pull, CSV upload) insert contacts
+**gated** (`sdr_batches.py init --gated` / `csv_audience.py ingest --gated`) and stop at
+two human gates — SLA-sourced pulls skip both and stay fully autonomous:
+
+1. **Segment gate** — signal intelligence (tech + hiring + the five ERP news triggers)
+   researches the pulled ACCOUNTS first; the Pipeline view shows them grouped by the
+   signals found, and only approved segments continue. Approval batches the contacts
+   (`assign_batches` skips gated contacts until then) and auto-starts generation —
+   trigger segments write **trigger-anchored ERP Data Retirement copy** (the
+   `erp-trigger` path in `generate_batch.py`: no web search, the stored verdict is the
+   research).
+2. **Outreach gate** — generated copy is reviewed on the Outreach tab (editable per
+   touch; a human edit always wins and re-promotes a lint-failed contact) and must be
+   approved before enrollment. `sdr_batches.py enroll` only touches approved or
+   autonomous contacts and prints how many are still held at the gate.
+
+There is no CLI for the approvals themselves (they are console actions:
+`POST /api/segments/approve`, `POST /api/outreach/approve`); "Approve all" in the UI is
+the escape hatch when a backlog should flow through un-reviewed.
+
 **CSV audiences** — instead of (a), a contact CSV can feed the batch DB directly (the
 console's Use view does this via `POST /api/audiences/upload`):
 ```bash
