@@ -11,7 +11,10 @@ const CAMPAIGN_PERSONA = {
 
 // Enrollment with a dry-run gate: always preview first, then a confirm modal
 // before the live write to Bison. Each preview row opens the full generated copy.
-export default function EnrollPanel({ generatedReady, onChanged }) {
+// Under the gated flow only APPROVED copy (plus autonomous SLA contacts) is
+// enrollable — generatedReady is that eligible count; awaitingApproval shows
+// how many generated sequences are still held at the review gate.
+export default function EnrollPanel({ generatedReady, awaitingApproval = 0, onChanged }) {
   const [preview, setPreview] = useState(null)
   const [result, setResult] = useState(null)
   const [openId, setOpenId] = useState(null)
@@ -43,16 +46,24 @@ export default function EnrollPanel({ generatedReady, onChanged }) {
   return (
     <div className="panel">
       <div className="row between">
-        <span className="section-h" style={{ margin: 0 }}>Enrollment → Email campaign</span>
-        <span className="badge">{num(generatedReady)} generated ready</span>
+        <span className="section-h" style={{ margin: 0 }}>4 · Enrollment → Email + LinkedIn campaigns</span>
+        <span className="row" style={{ gap: 8 }}>
+          <span className="badge">{num(generatedReady)} approved ready</span>
+          {awaitingApproval > 0 && (
+            <span className="badge" style={{ color: 'var(--amber)', borderColor: 'var(--amber)' }}
+              title="Generated copy still at the review gate — approve it on the Outreach tab">
+              {num(awaitingApproval)} awaiting approval
+            </span>
+          )}
+        </span>
       </div>
 
       <ErrorBanner error={error} />
 
       {generatedReady === 0 && !result && (
         <div className="banner info" style={{ marginTop: 12 }}>
-          Nothing to enroll right now — enrollment activates once batches generate copy
-          (contacts in <span className="mono">generated</span> status).
+          Nothing to enroll right now — enrollment activates once generated copy is
+          <b> approved</b> on the Outreach tab (SLA-sourced contacts enroll without a gate).
         </div>
       )}
 
@@ -62,7 +73,7 @@ export default function EnrollPanel({ generatedReady, onChanged }) {
         </button>
         {preview && preview.rows.length > 0 && (
           <button onClick={() => setConfirming(true)} disabled={busy}>
-            Enroll {num(preview.rows.length)} live →
+            Enroll {num(preview.rows.length)} approved live →
           </button>
         )}
       </div>

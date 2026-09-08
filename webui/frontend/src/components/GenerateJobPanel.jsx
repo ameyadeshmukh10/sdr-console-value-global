@@ -47,7 +47,7 @@ export default function GenerateJobPanel({ jobId, onDone }) {
     <div className="panel" style={{ marginTop: 16 }}>
       <div className="row between">
         <span className="section-h" style={{ margin: 0 }}>
-          Generation job <span className="mono">{job.job_id}</span> · batch #{job.batch_id}
+          Generation job <span className="mono">{job.job_id}</span> · batch{(job.batch_ids?.length || 1) > 1 ? 'es' : ''} #{(job.batch_ids || [job.batch_id]).join(', #')}
         </span>
         <span className="row" style={{ gap: 10 }}>
           {running

@@ -76,6 +76,13 @@ export const api = {
   unenrollRun: (opts) => post('/api/unenroll/run', opts || {}),
   outreach: (params) => get('/api/outreach?' + new URLSearchParams(params).toString()),
   outreachDetail: (id) => get('/api/outreach/' + encodeURIComponent(id)),
+  // Gated approval flow — segments (account gate) + outreach review (copy gate)
+  segments: () => get('/api/segments'),
+  approveSegments: (body) => post('/api/segments/approve', body),
+  intelRun: () => post('/api/intel/run'),
+  intelStatus: () => get('/api/intel/status'),
+  updateOutreach: (id, body) => post('/api/outreach/' + encodeURIComponent(id) + '/update', body),
+  approveOutreach: (body) => post('/api/outreach/approve', body),
   ingest: (listId) => post('/api/ingest', { list_id: listId }),
   reindex: () => post('/api/reindex'),
   progress: () => get('/api/progress'),

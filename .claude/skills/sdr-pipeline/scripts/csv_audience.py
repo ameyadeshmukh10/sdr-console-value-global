@@ -181,7 +181,8 @@ def build_contacts(rows, id_suffix):
     return contacts, counts, skipped_examples
 
 
-def ingest(csv_path, name, audience_id=None, by=None, batch_size=25, dry_run=False):
+def ingest(csv_path, name, audience_id=None, by=None, batch_size=25, dry_run=False,
+           gated=False):
     """Parse + insert + batch. Returns the summary dict (also what the CLI prints)."""
     audience_id = audience_id or f"aud-{secrets.token_hex(4)}"
     suffix = audience_id.split("-", 1)[-1] or secrets.token_hex(4)
@@ -205,7 +206,7 @@ def ingest(csv_path, name, audience_id=None, by=None, batch_size=25, dry_run=Fal
 
     summary = {
         "ok": True, "audience_id": audience_id, "name": name, "by": by,
-        "dry_run": bool(dry_run), "mapped_fields": mapped_fields,
+        "dry_run": bool(dry_run), "gated": bool(gated), "mapped_fields": mapped_fields,
         "counts": counts, "skipped_examples": skipped_examples,
         "added": 0, "new_batches": 0, "batch_ids": [],
         "contact_prefix": f"csv-{suffix}-",
@@ -221,7 +222,7 @@ def ingest(csv_path, name, audience_id=None, by=None, batch_size=25, dry_run=Fal
         conn = db.connect()
         try:
             db.init_schema(conn)
-            added = db.upsert_contacts(conn, fresh)
+            added = db.upsert_contacts(conn, fresh, gated=gated)
             made = db.assign_batches(conn, batch_size)
             bids = sorted({r[0] for r in conn.execute(
                 "SELECT DISTINCT batch_id FROM contacts WHERE contact_id LIKE ? "
@@ -238,7 +239,8 @@ def ingest(csv_path, name, audience_id=None, by=None, batch_size=25, dry_run=Fal
 def cmd_ingest(args):
     try:
         summary = ingest(args.file, args.name, audience_id=args.id, by=args.by,
-                         batch_size=args.batch_size, dry_run=args.dry_run)
+                         batch_size=args.batch_size, dry_run=args.dry_run,
+                         gated=args.gated)
     except (ValueError, OSError, csv.Error) as e:
         print(json.dumps({"ok": False, "error": str(e)[:400]}))
         return 1
@@ -302,6 +304,8 @@ def main():
     p.add_argument("--by", default=None, help="who uploaded (email), for the record")
     p.add_argument("--batch-size", type=int, default=25)
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--gated", action="store_true",
+                   help="insert into the human-approval flow (segment gate before batching)")
     p.set_defaults(func=cmd_ingest)
     args = ap.parse_args()
     if args.self_test:

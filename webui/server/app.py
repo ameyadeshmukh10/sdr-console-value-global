@@ -373,9 +373,16 @@ def db_contact_meta():
     incl. ones sourced via Clay that never went through contacts.jsonl)."""
     out = {}
     with db_connect() as conn:
-        for r in conn.execute(
-            "SELECT contact_id, first_name, last_name, email, title, company, linkedin_url, "
-            "persona, domain, variant, status, error, batch_id FROM contacts"):
+        try:
+            rows = conn.execute(
+                "SELECT contact_id, first_name, last_name, email, title, company, linkedin_url, "
+                "persona, domain, variant, status, error, batch_id, "
+                "COALESCE(gated,0) gated, segment, approved_at FROM contacts")
+        except sqlite3.Error:  # pre-approval-flow DB: fall back to the old shape
+            rows = conn.execute(
+                "SELECT contact_id, first_name, last_name, email, title, company, linkedin_url, "
+                "persona, domain, variant, status, error, batch_id FROM contacts")
+        for r in rows:
             out[r["contact_id"]] = dict(r)
     return out
 
@@ -439,6 +446,10 @@ class OutreachIndex:
                         "cta_type": derive_cta(asset),
                         "status": dbm.get("status", ""),
                         "batch_id": dbm.get("batch_id"),
+                        "gated": bool(dbm.get("gated")),
+                        "segment": dbm.get("segment") or asset.get("segment") or "",
+                        "approved": bool(dbm.get("approved_at")),
+                        "edited": bool(asset.get("edited_at")),
                     })
             # sort populated companies first (blanks last), then by name
             rows.sort(key=lambda r: (r["company"].strip() == "", r["company"].lower(), r["last_name"].lower()))
@@ -472,11 +483,16 @@ class OutreachIndex:
         signal = get("signal").lower()
         q = get("q").lower()
         group_by = get("group_by")
+        approved = get("approved")  # review filter: "yes" / "no" over gated rows
 
         def matches(r):
             if persona and r["persona"] != persona:
                 return False
             if status and r["status"] != status:
+                return False
+            if approved == "yes" and not r.get("approved"):
+                return False
+            if approved == "no" and (r.get("approved") or not r.get("gated")):
                 return False
             if cta and r["cta_type"] != cta:
                 return False
@@ -566,9 +582,15 @@ def outreach_detail(contact_id):
             "status": dbm.get("status", ""),
             "error": dbm.get("error"),
             "batch_id": dbm.get("batch_id"),
+            "gated": bool(dbm.get("gated")),
+            "segment": dbm.get("segment") or asset.get("segment") or "",
+            "approved": bool(dbm.get("approved_at")),
+            "approved_at": dbm.get("approved_at"),
         },
         "signal": asset.get("signal", ""),
         "cta_type": derive_cta(asset),
+        "variant": asset.get("variant") or dbm.get("variant") or "",
+        "edited_at": asset.get("edited_at"),
         "email": asset.get("email", {}),
         "linkedin": asset.get("linkedin", {}),
     }
@@ -710,11 +732,15 @@ def run_script_streaming(args, on_stderr_line=None, timeout=3600):
 
 
 def do_ingest(list_id, source="manual", by=None):
+    """Pull a HubSpot list + init batches. Manual pulls enter the GATED flow
+    (contacts wait at the segment gate; signal intelligence auto-starts);
+    SLA-sourced pulls stay autonomous (pre-gate behavior, batched right away)."""
     pre = db_status()
+    gated = not str(source or "").startswith("sla")
     pull = run_script([str(HUBSPOT_PULL), str(list_id)], timeout=600)
     if pull["returncode"] != 0:
         return {"ok": False, "stage": "pull", "pull": pull}
-    init = run_script([str(SDR_BATCHES), "init"], timeout=600)
+    init = run_script([str(SDR_BATCHES), "init"] + (["--gated"] if gated else []), timeout=600)
     if init["returncode"] != 0:
         return {"ok": False, "stage": "init", "pull": pull, "init": init}
     INDEX.build()
@@ -728,11 +754,15 @@ def do_ingest(list_id, source="manual", by=None):
     new_contacts = int(m.group(1)) if m else (post["total_contacts"] - pre["total_contacts"])
     new_batches = int(m.group(2)) if m else (
         sum(post["batches_by_status"].values()) - sum(pre["batches_by_status"].values()))
+    intel = None
+    if gated:
+        intel, _ = start_intel_job(auto=True)  # research the pulled accounts' signals
     return {
-        "ok": True,
+        "ok": True, "gated": gated,
         "pull": pull, "init": init,
         "new_contacts": new_contacts, "new_batches": new_batches,
         "pending_batches": db_batches(status="pending")["batches"],
+        "intel": intel,
         "status": post,
     }
 
@@ -895,7 +925,9 @@ def do_upload_audience(name, filename, csv_text, by=None):
     CSV_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     csv_path = CSV_UPLOADS_DIR / f"{aid}.csv"
     csv_path.write_text(csv_text, encoding="utf-8")
-    args = [str(CSV_AUDIENCE), "ingest", "--file", str(csv_path), "--name", name, "--id", aid]
+    # CSV uploads enter the gated flow: contacts wait at the segment gate.
+    args = [str(CSV_AUDIENCE), "ingest", "--file", str(csv_path), "--name", name,
+            "--id", aid, "--gated"]
     if by:
         args += ["--by", by]
     res = run_script(args, timeout=600)
@@ -926,7 +958,8 @@ def do_upload_audience(name, filename, csv_text, by=None):
         "mapped_fields": summary.get("mapped_fields") or [],
     }
     record_audience(rec)
-    return {"ok": True, "audience": rec, "status": db_status()}
+    intel, _ = start_intel_job(auto=True)  # research the uploaded accounts' signals
+    return {"ok": True, "audience": rec, "gated": True, "intel": intel, "status": db_status()}
 
 
 # ----------------------------------------------------------------------------
@@ -1493,9 +1526,18 @@ ENROLL_COUNTS = re.compile(r"enroll(?:\s*\(dry-run\))?:\s*(\{.*\})")
 
 
 def _generated_count():
+    """Contacts enrollment would touch now: 'generated' AND past the outreach
+    gate (autonomous, or gated-with-approval). Falls back to the plain
+    generated count on a pre-migration DB."""
     try:
         with db_connect() as conn:
-            return conn.execute("SELECT COUNT(*) FROM contacts WHERE status='generated'").fetchone()[0]
+            try:
+                return conn.execute(
+                    "SELECT COUNT(*) FROM contacts WHERE status='generated' "
+                    "AND (COALESCE(gated,0)=0 OR approved_at IS NOT NULL)").fetchone()[0]
+            except sqlite3.Error:
+                return conn.execute(
+                    "SELECT COUNT(*) FROM contacts WHERE status='generated'").fetchone()[0]
     except sqlite3.Error:
         return 0
 
@@ -1586,6 +1628,12 @@ def progress_payload():
                 per_counts.setdefault(r["batch_id"], {})[r["status"]] = r["n"]
         for b in active:
             b["counts"] = per_counts.get(b["batch_id"], {})
+        # gated-flow stage rollup (read-only; degrades on a pre-migration DB)
+        review = {}
+        try:
+            review = _bdb().review_counts(conn)
+        except Exception:  # noqa: BLE001
+            review = {}
     return {
         "contacts_by_status": cstat,
         "batches_by_status": bstat,
@@ -1593,6 +1641,8 @@ def progress_payload():
         "total_batches": total_batches,
         "active_batches": active,
         "generated_ready": cstat.get("generated", 0),
+        "review": review,
+        "enroll_ready": review.get("enroll_ready", cstat.get("generated", 0)),
     }
 
 
@@ -1660,6 +1710,7 @@ def _serialize_job(job):
         return None
     return {
         "job_id": job["job_id"], "kind": job["kind"], "batch_id": job["batch_id"],
+        "batch_ids": job.get("batch_ids") or [job["batch_id"]],
         "status": job["status"], "started_at": job["started_at"],
         "finished_at": job["finished_at"], "summary": job["summary"],
         "error": job["error"], "cancel_requested": job["cancel"].is_set(),
@@ -1668,7 +1719,7 @@ def _serialize_job(job):
     }
 
 
-def _run_generate_job(job_id, batch_id, variant="value-give"):
+def _run_generate_job(job_id, batch_ids, variant="value-give"):
     global ACTIVE_GEN_JOB
     job = JOBS[job_id]
 
@@ -1697,14 +1748,19 @@ def _run_generate_job(job_id, batch_id, variant="value-give"):
         # import lazily so app startup never depends on the Anthropic client
         sys.path.insert(0, str(GENERATE_BATCH.parent))
         import generate_batch as G  # noqa: E402
-        log(f"starting batch {batch_id} [{variant}]")
-        summary = G.generate_batch(batch_id, progress_cb=progress_cb, cancel_event=job["cancel"],
-                                   variant=variant)
-        job["summary"] = {"total": summary["total"], "linted": summary["linted"],
-                          "failed": summary["failed"]}
-        log(f"generation done: {summary['linted']} linted, {summary['failed']} failed; ingesting…")
-        ing = run_script([str(SDR_BATCHES), "ingest", str(batch_id)], timeout=240)
-        log((ing["stdout"] or ing["stderr"]).strip()[:200])
+        totals = {"total": 0, "linted": 0, "failed": 0}
+        for bid in batch_ids:
+            if job["cancel"].is_set():
+                break
+            log(f"starting batch {bid} [{variant}]")
+            summary = G.generate_batch(bid, progress_cb=progress_cb, cancel_event=job["cancel"],
+                                       variant=variant)
+            for k in totals:
+                totals[k] += summary[k]
+            job["summary"] = dict(totals)
+            log(f"batch {bid} done: {summary['linted']} linted, {summary['failed']} failed; ingesting…")
+            ing = run_script([str(SDR_BATCHES), "ingest", str(bid)], timeout=240)
+            log((ing["stdout"] or ing["stderr"]).strip()[:200])
         INDEX.build()
         job["status"] = "cancelled" if job["cancel"].is_set() else "done"
     except Exception as e:  # noqa: BLE001
@@ -1725,7 +1781,13 @@ def _clean_variant(v):
 
 
 def start_generate_job(batch_id, variant="value-give"):
+    """Start one background generation job over one batch id or a list of them
+    (segment approval hands over every batch it just created). Batches run
+    sequentially inside the single job slot."""
     global ACTIVE_GEN_JOB
+    batch_ids = [int(b) for b in (batch_id if isinstance(batch_id, (list, tuple)) else [batch_id])]
+    if not batch_ids:
+        return {"ok": False, "error": "no batches to generate"}, 400
     with JOB_LOCK:
         if ACTIVE_GEN_JOB and JOBS.get(ACTIVE_GEN_JOB, {}).get("status") == "running":
             return {"ok": False, "error": "a generation job is already running",
@@ -1733,7 +1795,8 @@ def start_generate_job(batch_id, variant="value-give"):
         job_id = None
     job_id = _new_job_id()
     job = {
-        "job_id": job_id, "kind": "generate", "batch_id": batch_id, "variant": variant,
+        "job_id": job_id, "kind": "generate", "batch_id": batch_ids[0],
+        "batch_ids": batch_ids, "variant": variant,
         "status": "running", "started_at": now_iso(), "finished_at": None,
         "contacts": {}, "log": [], "cancel": threading.Event(),
         "summary": {"total": 0, "linted": 0, "failed": 0}, "error": None,
@@ -1741,8 +1804,8 @@ def start_generate_job(batch_id, variant="value-give"):
     with JOB_LOCK:
         JOBS[job_id] = job
         ACTIVE_GEN_JOB = job_id
-    threading.Thread(target=_run_generate_job, args=(job_id, batch_id, variant), daemon=True).start()
-    return {"ok": True, "job_id": job_id}, 200
+    threading.Thread(target=_run_generate_job, args=(job_id, batch_ids, variant), daemon=True).start()
+    return {"ok": True, "job_id": job_id, "batch_ids": batch_ids}, 200
 
 
 def now_iso():
@@ -3703,6 +3766,370 @@ def start_news_backfill(limit=None, stale_days=None, force=False):
 
 
 # ----------------------------------------------------------------------------
+# Gated approval flow (2026-09). Manual list pulls + CSV uploads stop at TWO
+# human gates: (1) the SEGMENT gate — signal intelligence (tech + hiring + the
+# five ERP news triggers) runs on the pulled accounts first, the accounts are
+# shown grouped by the signals found, and only user-approved segments continue
+# to copy generation (trigger segments generate through the erp-trigger
+# verdict-anchored path); (2) the OUTREACH gate — generated copy is reviewed /
+# edited per contact and must be approved before enrollment touches it.
+# SLA-sourced contacts bypass both gates (fully autonomous, as before).
+# Writes go through batch_db in-process (read-write), like the detect engines.
+# ----------------------------------------------------------------------------
+ERP_TRIGGER_ORDER = ["ma_carveout", "erp_migration", "license_audit", "ebs_oci", "ebs_performance"]
+ERP_VARIANT = "erp-trigger"
+SEGMENT_LABELS = {
+    "ma_carveout": "M&A carve-out", "erp_migration": "ERP migration",
+    "license_audit": "License audit", "ebs_oci": "EBS on OCI",
+    "ebs_performance": "EBS performance",
+    "hiring": "Hiring (sales roles)", "no_signals": "No signals found",
+}
+SEGMENT_ORDER = ERP_TRIGGER_ORDER + ["hiring", "no_signals"]
+
+
+def _bdb():
+    """The read-write batch_db handle for in-process approval writes (the
+    detect-engine pattern; the plain db_connect stays read-only)."""
+    return pipeline_db
+
+
+# ---- signal-intelligence job (stage 2: research accounts before approval) ----
+INTEL_JOBS = {}
+INTEL_LOCK = threading.Lock()
+_INTEL_SEQ = [0]
+INTEL_ENGINES = (  # (stage key, module, availability fn, backfill workers)
+    ("tech", "tech_signals", "tech_available", 3),
+    ("hiring", "hiring_signals", "hiring_available", 3),
+    ("news", "news_signals", "news_available", 2),
+)
+
+
+def _pending_review_domains():
+    """Domains of gated contacts still at the segment gate (degrades to [])."""
+    try:
+        with db_connect() as conn:
+            return [r["domain"] for r in conn.execute(
+                "SELECT DISTINCT domain FROM contacts WHERE COALESCE(gated,0)=1 "
+                "AND account_approved_at IS NULL AND domain IS NOT NULL AND domain != '' "
+                "ORDER BY domain")]
+    except sqlite3.Error:
+        return []
+
+
+def latest_intel_job():
+    return list(INTEL_JOBS.values())[-1] if INTEL_JOBS else None
+
+
+def start_intel_job(auto=False):
+    """Run tech + hiring + news research over every account awaiting segment
+    approval (each engine's backfill is cache-aware, so already-researched
+    accounts cost nothing). One job at a time. Returns (payload, status)."""
+    domains = _pending_review_domains()
+    if not domains:
+        return {"ok": False, "error": "no accounts awaiting review"}, (200 if auto else 400)
+    with INTEL_LOCK:
+        running = next((j["job_id"] for j in INTEL_JOBS.values() if j["status"] == "running"), None)
+        if running:
+            return ({"ok": True, "job_id": running, "already_running": True}, 200) if auto else \
+                   ({"ok": False, "error": "signal intelligence is already running",
+                     "job_id": running}, 409)
+        _INTEL_SEQ[0] += 1
+        job_id = f"intel-{_INTEL_SEQ[0]}"
+        job = {"job_id": job_id, "status": "running", "auto": bool(auto),
+               "domains": len(domains), "stage": None, "stages": {}, "log": [],
+               "error": None, "started_at": now_iso(), "finished_at": None}
+        INTEL_JOBS[job_id] = job
+
+    def _run():
+        import importlib
+        try:
+            for key, mod_name, avail_fn, workers in INTEL_ENGINES:
+                st = {"status": "running", "done": 0, "total": len(domains),
+                      "detected": 0, "skipped": 0, "errors": 0}
+                job["stages"][key] = st
+                job["stage"] = key
+                try:
+                    mod = importlib.import_module(mod_name)
+                    ok, reason = getattr(mod, avail_fn)()
+                    if not ok:
+                        st.update({"status": "unavailable", "reason": reason})
+                        job["log"] = (job["log"] + [f"{key}: unavailable ({reason})"])[-40:]
+                        continue
+
+                    def _prog(done, total, domain, res, st=st, key=key):
+                        st["done"], st["total"] = done, total
+                        if (res.get("error_exc") or res.get("tech_error")
+                                or res.get("hiring_error") or res.get("news_error")):
+                            st["errors"] += 1
+                        elif res.get("skipped"):
+                            st["skipped"] += 1
+                        else:
+                            st["detected"] += 1
+                        job["log"] = (job["log"] + [f"{key}: {domain}"])[-40:]
+
+                    summary = mod.backfill(domains=domains, workers=workers, progress=_prog)
+                    st.update(summary)
+                    st["status"] = "done"
+                except Exception as e:  # noqa: BLE001 — one engine never kills the job
+                    st["status"] = "error"
+                    st["error"] = str(e)[:300]
+                    job["log"] = (job["log"] + [f"{key}: ERROR {str(e)[:120]}"])[-40:]
+            job["status"] = "done"
+        finally:
+            job["stage"] = None
+            job["finished_at"] = now_iso()
+            if job["status"] == "running":  # a non-engine crash above
+                job["status"] = "error"
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"ok": True, "job_id": job_id, "domains": len(domains)}, 200
+
+
+# ---- segments (stage 3: accounts grouped by the signals found) ---------------
+def _account_memberships(sig_row):
+    """Segment memberships for one RESEARCHED account_signals row:
+    [(segment_id, score, headline, date)] — every found ERP trigger, plus
+    'hiring' when open sales roles exist, else the 'no_signals' bucket."""
+    out = []
+    try:
+        triggers = (json.loads(sig_row.get("news_detail") or "{}") or {}).get("triggers") or {}
+    except (ValueError, TypeError):
+        triggers = {}
+    for tid in ERP_TRIGGER_ORDER:
+        v = triggers.get(tid)
+        if isinstance(v, dict) and v.get("found"):
+            out.append({"segment": tid, "score": v.get("score") or 0,
+                        "headline": v.get("headline") or "", "date": v.get("date") or ""})
+    try:
+        hd = json.loads(sig_row.get("hiring_detail") or "{}") or {}
+    except (ValueError, TypeError):
+        hd = {}
+    if hd.get("sales_titles"):
+        out.append({"segment": "hiring", "score": None,
+                    "headline": sig_row.get("hiring_signals") or "", "date": ""})
+    if not out:
+        out.append({"segment": "no_signals", "score": None, "headline": "", "date": ""})
+    return out
+
+
+def _gated_accounts_with_signals():
+    """(accounts, signal rows by domain) for everyone at the segment gate.
+    Degrades to ([], {})."""
+    try:
+        with db_connect() as conn:
+            accounts = [dict(r) for r in conn.execute(
+                "SELECT domain, MAX(company) company, COUNT(*) contacts FROM contacts "
+                "WHERE COALESCE(gated,0)=1 AND account_approved_at IS NULL "
+                "AND domain IS NOT NULL AND domain != '' "
+                "GROUP BY domain ORDER BY COUNT(*) DESC, domain")]
+            sig = {}
+            if accounts:
+                doms = [a["domain"] for a in accounts]
+                qmarks = ",".join("?" * len(doms))
+                for r in conn.execute(
+                        f"SELECT domain, news_signals, news_detail, news_checked_at, news_error, "
+                        f"hiring_signals, hiring_detail, hiring_checked_at, "
+                        f"tech_signals, tech_checked_at FROM account_signals "
+                        f"WHERE domain IN ({qmarks})", doms):
+                    sig[r["domain"]] = dict(r)
+            return accounts, sig
+    except sqlite3.Error:
+        return [], {}
+
+
+def segments_payload():
+    """Stage-3 view: accounts awaiting approval, grouped into signal segments
+    (an account sits in every segment it matched), plus the ones whose research
+    hasn't landed yet and the intel job state. Read-only; never 500."""
+    accounts, sig = _gated_accounts_with_signals()
+    seg_accounts = {sid: [] for sid in SEGMENT_ORDER}
+    pending = []
+    for a in accounts:
+        row = sig.get(a["domain"])
+        if not row or row.get("news_signals") is None:  # news is the definitive researcher
+            missing = [k for k, done in (
+                ("tech", bool((row or {}).get("tech_checked_at"))),
+                ("hiring", bool((row or {}).get("hiring_checked_at"))),
+                ("news", False)) if not done]
+            pending.append({**a, "missing": missing,
+                            "news_error": (row or {}).get("news_error")})
+            continue
+        for m in _account_memberships(row):
+            seg_accounts[m["segment"]].append({**a, **m, "tech": row.get("tech_signals") or ""})
+    for sid in ERP_TRIGGER_ORDER:
+        seg_accounts[sid].sort(key=lambda x: -(x.get("score") or 0))
+    segments = [{"id": sid, "label": SEGMENT_LABELS[sid],
+                 "kind": ("trigger" if sid in ERP_TRIGGER_ORDER else sid),
+                 "accounts": seg_accounts[sid],
+                 "contact_total": sum(x["contacts"] for x in seg_accounts[sid])}
+                for sid in SEGMENT_ORDER]
+    job = latest_intel_job()
+    return {"ok": True,
+            "accounts": len(accounts),
+            "contacts": sum(a["contacts"] for a in accounts),
+            "researched": len(accounts) - len(pending),
+            "pending": pending,
+            "segments": segments,
+            "intel": {"job": job, "running": bool(job and job["status"] == "running")}}
+
+
+def do_approve_segments(segments=None, domains=None, approve_all=False):
+    """Stage-4 action: approve accounts for generation. Selection is by segment
+    ids, explicit domains, or everything researched. Each approved account gets
+    its WINNING segment (highest-scoring selected trigger, else hiring, else
+    no_signals); trigger winners generate through the erp-trigger path.
+    Batches the approved contacts and auto-starts generation on the new
+    batches. Returns (payload, status)."""
+    selected = {s for s in (segments or []) if s in SEGMENT_LABELS}
+    want_domains = {str(d).strip().lower() for d in (domains or []) if str(d).strip()}
+    if not (approve_all or selected or want_domains):
+        return {"ok": False, "error": "nothing selected — pass segments, domains, or all"}, 400
+
+    accounts, sig = _gated_accounts_with_signals()
+    approvals = []
+    for a in accounts:
+        row = sig.get(a["domain"])
+        if not row or row.get("news_signals") is None:
+            # research hasn't landed: only an explicit domain (or approve-all)
+            # can push it through, and it goes down the default path
+            if approve_all or a["domain"] in want_domains:
+                approvals.append({"domain": a["domain"], "segment": "no_signals", "variant": None})
+            continue
+        mships = _account_memberships(row)
+        if approve_all or a["domain"] in want_domains:
+            pool = mships
+        else:
+            pool = [m for m in mships if m["segment"] in selected]
+        if not pool:
+            continue
+        trig = [m for m in pool if m["segment"] in ERP_TRIGGER_ORDER]
+        if trig:
+            winning = max(trig, key=lambda m: m.get("score") or 0)["segment"]
+        elif any(m["segment"] == "hiring" for m in pool):
+            winning = "hiring"
+        else:
+            winning = "no_signals"
+        approvals.append({"domain": a["domain"], "segment": winning,
+                          "variant": ERP_VARIANT if winning in ERP_TRIGGER_ORDER else None})
+
+    if not approvals:
+        return {"ok": False, "error": "no awaiting accounts matched the selection"}, 400
+
+    bdb = _bdb()
+
+    def _run():
+        conn = bdb.connect()
+        try:
+            bdb.init_schema(conn)
+            return bdb.approve_accounts(conn, approvals)
+        finally:
+            conn.close()
+
+    res = bdb.retry_locked(_run)
+    generation = None
+    if res.get("batch_ids"):
+        generation, _ = start_generate_job(res["batch_ids"])
+    return {"ok": True, "approved_accounts": len(approvals),
+            "approved_contacts": res.get("contacts", 0),
+            "new_batches": res.get("batches", 0), "batch_ids": res.get("batch_ids", []),
+            "generation": generation}, 200
+
+
+# ---- outreach gate (stage 5-6: edit + approve the generated copy) ------------
+_EDIT_EMAIL_KEYS = [f"{k}{i}" for i in range(1, 5) for k in ("subject", "body")]
+_EDIT_LI_KEYS = ["li_connect", "li_msg1", "li_msg2"]
+
+
+def do_update_outreach(contact_id, email=None, linkedin=None, by=None):
+    """Apply a human edit to one generated asset. The edit always wins: it is
+    saved verbatim and, when all four touches are present, the contact is
+    (re)promoted to 'generated' — lint runs only to surface soft warnings.
+    Returns (payload, status)."""
+    cid = str(contact_id or "").strip()
+    fp = GEN_DIR / f"{cid}.json"
+    if not cid or not fp.is_file():
+        return {"ok": False, "error": f"no generated copy for {contact_id}"}, 404
+    try:
+        asset = json.loads(fp.read_text())
+    except (ValueError, OSError) as e:
+        return {"ok": False, "error": f"unreadable asset: {e}"}, 500
+
+    changed = False
+    for k in _EDIT_EMAIL_KEYS:
+        if isinstance(email, dict) and k in email:
+            asset.setdefault("email", {})[k] = str(email[k] or "")
+            changed = True
+    for k in _EDIT_LI_KEYS:
+        if isinstance(linkedin, dict) and k in linkedin:
+            asset.setdefault("linkedin", {})[k] = str(linkedin[k] or "")
+            changed = True
+    if not changed:
+        return {"ok": False, "error": "nothing to update"}, 400
+    asset["edited_at"] = now_iso()
+    if by:
+        asset["edited_by"] = by
+
+    warnings = []
+    try:
+        sys.path.insert(0, str(GENERATE_BATCH.parent))
+        import generate_batch as G  # noqa: E402
+        warnings = G.lint_assets(asset)
+    except Exception as e:  # noqa: BLE001 — warnings are advisory only
+        warnings = [f"lint unavailable: {e}"]
+
+    tmp = fp.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(asset, indent=2, ensure_ascii=False))
+    os.replace(tmp, fp)
+
+    # a complete human edit repromotes even a lint-failed contact — human wins
+    status = None
+    if all((asset.get("email") or {}).get(k) for k in _EDIT_EMAIL_KEYS):
+        bdb = _bdb()
+
+        def _run():
+            conn = bdb.connect()
+            try:
+                bdb.init_schema(conn)
+                conn.execute("UPDATE contacts SET status='generated', error=NULL, updated_at=? "
+                             "WHERE contact_id=? AND status IN ('generated','failed')",
+                             (now_iso(), cid))
+                conn.commit()
+                r = conn.execute("SELECT status FROM contacts WHERE contact_id=?", (cid,)).fetchone()
+                return r["status"] if r else None
+            finally:
+                conn.close()
+
+        try:
+            status = bdb.retry_locked(_run)
+        except Exception as e:  # noqa: BLE001 — the file edit already stands
+            warnings.append(f"status update failed: {e}")
+    INDEX.build()
+    return {"ok": True, "contact_id": cid, "warnings": warnings, "status": status,
+            "detail": outreach_detail(cid)}, 200
+
+
+def do_approve_outreach(contact_ids=None, approve_all=False):
+    """Stamp approved_at on gated generated contacts (stage 6). Returns
+    (payload, status)."""
+    if not approve_all and not contact_ids:
+        return {"ok": False, "error": "pass contact_ids or all=true"}, 400
+    bdb = _bdb()
+
+    def _run():
+        conn = bdb.connect()
+        try:
+            bdb.init_schema(conn)
+            n = bdb.approve_outreach(conn, None if approve_all else contact_ids)
+            return n, bdb.review_counts(conn)
+        finally:
+            conn.close()
+
+    approved, review = bdb.retry_locked(_run)
+    INDEX.build()
+    return {"ok": True, "approved": approved, "review": review}, 200
+
+
+# ----------------------------------------------------------------------------
 # A/B by instruction variant + "show the product" sample fulfillment.
 # ----------------------------------------------------------------------------
 SAMPLES_DIR = DATA / "outreach" / "samples"
@@ -3911,6 +4338,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if path == "/api/segments":
+                return self._json(segments_payload())
+            if path == "/api/intel/status":
+                job = latest_intel_job()
+                return self._json({"ok": True, "job": job,
+                                   "running": bool(job and job["status"] == "running")})
             if path == "/api/signals":
                 return self._json(signals_payload())
             if path == "/api/signals/detail":
@@ -4201,6 +4634,27 @@ class Handler(BaseHTTPRequestHandler):
                 payload, code = start_tech_backfill(
                     limit=body.get("limit"), stale_days=body.get("stale_days"),
                     force=bool(body.get("force")))
+                return self._json(payload, code)
+            if path == "/api/intel/run":
+                payload, code = start_intel_job(auto=False)
+                return self._json(payload, code)
+            if path == "/api/segments/approve":
+                body = self._read_body()
+                payload, code = do_approve_segments(
+                    segments=body.get("segments"), domains=body.get("domains"),
+                    approve_all=bool(body.get("all")))
+                return self._json(payload, code)
+            if path == "/api/outreach/approve":
+                body = self._read_body()
+                payload, code = do_approve_outreach(
+                    contact_ids=body.get("contact_ids"), approve_all=bool(body.get("all")))
+                return self._json(payload, code)
+            if path.startswith("/api/outreach/") and path.endswith("/update"):
+                cid = path[len("/api/outreach/"):-len("/update")]
+                body = self._read_body()
+                payload, code = do_update_outreach(
+                    cid, email=body.get("email"), linkedin=body.get("linkedin"),
+                    by=verify_token(bearer_from_headers(self.headers)))
                 return self._json(payload, code)
             if path == "/api/signals/news/detect":
                 body = self._read_body()
@@ -4605,6 +5059,17 @@ def main():
     resumed = resume_batch_jobs()
     if resumed:
         print(f"[webui] resumed {resumed} in-flight batch job(s)")
+    # Best-effort schema migration at boot (read-write, then never again): the
+    # server's own DB handle is read-only, so make sure the approval-flow
+    # columns exist before any read query touches them.
+    try:
+        _conn = pipeline_db.connect()
+        try:
+            pipeline_db.init_schema(_conn)
+        finally:
+            _conn.close()
+    except Exception as e:  # noqa: BLE001 — a locked/absent DB must not block boot
+        print(f"[webui] schema migration skipped: {type(e).__name__}: {e}", flush=True)
     threading.Thread(target=_activity_autosync_loop, daemon=True).start()
     threading.Thread(target=_aisdr_sync_loop, daemon=True).start()
     threading.Thread(target=_unenrollment_loop, daemon=True).start()
