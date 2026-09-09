@@ -5184,6 +5184,22 @@ def main():
         _c.close()
     except Exception as e:  # noqa: BLE001
         print(f"[webui] schema init warning: {type(e).__name__}: {e}")
+    # Seed the client's do-not-contact list on a fresh DB (hard program rule: the
+    # suppression list is enforced before anything sends). Idempotent: loads only
+    # when no rules exist and the committed seed CSV is present; console uploads
+    # remain the source of truth afterwards.
+    try:
+        seed_csv = PROJECT_ROOT / "data" / "outreach" / "suppression_seed.csv"
+        with db_connect() as _c:
+            have_rules = bool(suppression.load_rules(_c))
+        if not have_rules and seed_csv.is_file():
+            rows = suppression.parse_rules_csv(seed_csv.read_text(encoding="utf-8-sig"))
+            added, total = suppression.load_rules_rows(
+                rows, source="boot-seed", by="docker-entrypoint")
+            print(f"[suppression] seeded {added} do-not-contact rules from "
+                  f"{seed_csv.name} ({total} active)", flush=True)
+    except Exception as e:  # noqa: BLE001 — the seed must never block boot
+        print(f"[suppression] boot seed warning: {type(e).__name__}: {e}", flush=True)
     print(f"[webui] building outreach index ...", flush=True)
     n = INDEX.build()
     print(f"[webui] indexed {n} generated outreach files")

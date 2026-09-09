@@ -125,8 +125,8 @@ HEADER_ALIASES = {
                 "website url", "company website url"},
     "industry": {"company industry", "industry"},
     "employees": {"company number of employees", "number of employees", "employees",
-                  "employee count", "headcount", "num employees", "company size",
-                  "of employees"},
+                  "employee count", "employee size", "headcount", "num employees",
+                  "company size", "of employees"},
 }
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")

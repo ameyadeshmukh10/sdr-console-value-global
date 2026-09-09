@@ -13,7 +13,10 @@ data/outreach/csv-uploads/
 # Autosync health status (runtime state; written by the server on every sync tick)
 data/interested-replies/.autosync_status.json
 
-# Transient SQLite WAL/SHM sidecar files (the .db itself IS committed)
+# The pipeline DB is runtime state (the committed template DB was purged for the
+# Value Global deployment — the app creates it at boot; prod lives on the volume)
+data/outreach/pipeline.db
+# Transient SQLite WAL/SHM sidecar files
 *.db-wal
 *.db-shm
 
