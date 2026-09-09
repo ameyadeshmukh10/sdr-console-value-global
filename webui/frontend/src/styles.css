@@ -159,10 +159,10 @@ tr.clickable:hover { background: var(--surface-hover); }
   display: inline-block; padding: 3px 11px; border-radius: 999px; font-size: 11px;
   font-weight: 600; line-height: 1.5; border: 1px solid var(--border-strong); white-space: nowrap; color: var(--text);
 }
-.badge.persona-sales-leadership { color: var(--p-sales); border-color: var(--p-sales); background: rgba(20, 108, 122, 0.07); }
-.badge.persona-revops { color: var(--p-revops); border-color: var(--p-revops); background: rgba(47, 109, 181, 0.07); }
-.badge.persona-partnerships { color: var(--p-partnerships); border-color: var(--p-partnerships); background: rgba(109, 93, 211, 0.07); }
-.badge.persona-sdr-bdr { color: var(--p-sdr); border-color: var(--p-sdr); background: rgba(184, 121, 31, 0.08); }
+.badge.persona-erp-owner { color: var(--p-sales); border-color: var(--p-sales); background: rgba(20, 108, 122, 0.07); }
+.badge.persona-dba { color: var(--p-revops); border-color: var(--p-revops); background: rgba(47, 109, 181, 0.07); }
+.badge.persona-data-governance { color: var(--p-partnerships); border-color: var(--p-partnerships); background: rgba(109, 93, 211, 0.07); }
+.badge.persona-it-leadership { color: var(--p-sdr); border-color: var(--p-sdr); background: rgba(184, 121, 31, 0.08); }
 .badge.status-enrolled { color: var(--green); border-color: var(--green); background: rgba(28, 130, 110, 0.08); }
 .badge.status-skipped { color: var(--amber); border-color: var(--amber); background: rgba(184, 121, 31, 0.08); }
 .badge.status-failed { color: var(--red); border-color: var(--red); background: rgba(220, 38, 38, 0.06); }

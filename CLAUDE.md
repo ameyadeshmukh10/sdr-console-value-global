@@ -7,10 +7,32 @@ documented), `.claude/skills/*/SKILL.md` (pipeline logic).
 
 ## What this is
 
-Autonomous outbound pipeline + web console for EverWorker's SDR AI Worker. It pulls ICP
-contacts from HubSpot, generates persona-targeted outreach with Claude sub-agents,
-enrolls into Email Bison (email) + HeyReach (LinkedIn), logs all activity back to
-HubSpot, and reports on results — including nightly AI SDR **deal attribution**.
+Autonomous outbound pipeline + web console configured for **Value Global's ERP Data
+Retirement service** (Oracle EBS archiving/retirement on the InfoCorvus ROAD platform).
+It ingests ICP contacts (CSV audiences primarily — the client has no CRM; HubSpot paths
+are dormant), runs signal intelligence (ERP technographics + the five ROAD triggers),
+generates read-first outreach with Claude, and enrolls into Email Bison (email) +
+HeyReach (LinkedIn, deferred).
+
+## Value Global configuration (2026-09, from the kick-off)
+
+- **Buyer group:** erp-owner / dba / data-governance / it-leadership
+  (`ai-sdr/scripts/buyer_group.py`); GTM titles, CEOs, procurement are NOT-ICP.
+  Messaging is uniform across personas by client decision.
+- **Suppression (blockers before any send):** the client's account do-not-contact list
+  (`sdr-pipeline/scripts/suppression.py`, `suppression_accounts` table, seeded from
+  `data/outreach/suppression_seed.csv` — a DRAFT pending client sign-off) and the
+  **Fusion-only rule** (Fusion detected with no on-prem ERP → suppress; Fusion + EBS
+  co-detection = mid-migration, keep). Both enforced at CSV ingest, the segment gate
+  (`suppressed` segment), and enrollment.
+- **ERP mention rule:** detected EBS/PeopleSoft/JDE is NAMED in copy (pattern + question,
+  never "we scanned you") — `erp_mention_block()` in `generate_batch.py`.
+- **Lead quality:** contacts carry country/industry/employees/import_flags; imports FLAG
+  (never drop) non-US/CA, healthcare, sub-1,000 headcount, and missing LinkedIn URLs.
+- **Copy system:** knowledge base + examples + agents are Value Global content; the
+  linter (`ai-sdr/scripts/lint_sequence.py`) enforces the client ban list, claim
+  discipline (licensing = cores/users, not data volume), the RE: subject chain, and the
+  read-first offer ladder. Volume guardrail: `ENROLL_MONTHLY_CAP` (default 3000).
 
 ## Architecture (verified, don't re-derive)
 

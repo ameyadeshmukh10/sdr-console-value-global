@@ -74,18 +74,20 @@ def heyreach_account_for(accounts, contact_id):
 
 # Per-persona Bison campaign routing (legacy; kept as a fallback).
 PERSONA_CAMPAIGN_ENV = {
-    "sales-leadership": "BISON_CAMPAIGN_SALES_LEADERSHIP",
-    "revops": "BISON_CAMPAIGN_REVOPS",
-    "partnerships": "BISON_CAMPAIGN_PARTNERSHIPS",
-    "sdr-bdr": "BISON_CAMPAIGN_SDR_BDR",
+    "erp-owner": "BISON_CAMPAIGN_ERP_OWNER",
+    "dba": "BISON_CAMPAIGN_DBA",
+    "data-governance": "BISON_CAMPAIGN_DATA_GOVERNANCE",
+    "it-leadership": "BISON_CAMPAIGN_IT_LEADERSHIP",
 }
 
 # Per-variant Bison campaign routing — one dedicated campaign per instruction set,
-# for clean per-variant interested-rate reporting in Bison.
+# for clean per-variant interested-rate reporting in Bison. All optional: unset
+# envs fall through to the persona campaign, then BISON_CAMPAIGN_ID.
 VARIANT_CAMPAIGN_ENV = {
     "value-give": "BISON_CAMPAIGN_VALUE_GIVE",
     "earn": "BISON_CAMPAIGN_EARN",
     "show": "BISON_CAMPAIGN_SHOW",
+    "erp-trigger": "BISON_CAMPAIGN_ERP_TRIGGER",
 }
 
 
@@ -121,9 +123,7 @@ def lint_email_assets(email):
         steps.append({"n": i, "subject": subj, "body": body})
     if issues:
         return issues
-    full = " ".join(s["body"] for s in steps)
-    if not L.METRIC.search(full):
-        issues.append("no concrete metric in the sequence")
+    issues += L.sequence_issues(steps)
     for idx, step in enumerate(steps):
         _, step_issues = L.lint_email(step, is_last=(idx == len(steps) - 1), is_first=(idx == 0))
         issues += [f"step{step['n']}: {it}" for it in step_issues]

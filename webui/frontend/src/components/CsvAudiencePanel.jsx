@@ -25,15 +25,32 @@ function StatusChips({ counts }) {
   )
 }
 
+const FLAG_LABELS = {
+  no_linkedin: 'missing LinkedIn URL (email-only)',
+  non_us_ca: 'outside US/Canada',
+  country_unknown: 'no country given',
+  healthcare: 'healthcare (out of ICP)',
+  below_icp_floor: 'under 1,000 employees',
+}
+
 function SkippedNote({ counts }) {
   if (!counts) return null
   const bits = []
+  if (counts.suppressed_account) bits.push(`${num(counts.suppressed_account)} on the do-not-contact list (blocked)`)
   if (counts.already_in_pipeline) bits.push(`${num(counts.already_in_pipeline)} already in the pipeline`)
   if (counts.no_email) bits.push(`${num(counts.no_email)} without a valid email`)
   if (counts.duplicate_in_file) bits.push(`${num(counts.duplicate_in_file)} duplicated in the file`)
-  if (counts.persona_defaulted) bits.push(`${num(counts.persona_defaulted)} with an unmatched title routed to sales-leadership`)
+  if (counts.persona_defaulted) bits.push(`${num(counts.persona_defaulted)} with an unmatched title routed to the default persona`)
+  const flags = counts.flag_counts || {}
+  for (const [k, n] of Object.entries(flags)) {
+    if (!n) continue
+    const label = FLAG_LABELS[k]
+      || (k.startsWith('country_inferred:') ? `likely ${k.split(':')[1]} (from domain)` : null)
+      || (k.startsWith('suppression_review:') ? `near-miss vs "${k.split(':')[1]}" — review` : k)
+    bits.push(`${num(n)} ${label}`)
+  }
   if (!bits.length) return null
-  return <span className="muted"> Skipped/adjusted: {bits.join(' · ')}.</span>
+  return <span className="muted"> Skipped/flagged: {bits.join(' · ')}.</span>
 }
 
 function AudienceContacts({ audienceId }) {

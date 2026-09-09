@@ -1,37 +1,54 @@
-# Gold ICP Email Sequence (example, value-anchored meeting CTAs)
+# Gold ICP Email Sequence (example, Value Global ERP Data Retirement)
 
-Generated for a representative ICP lead and validated with `lint_sequence.py`. Use as a template;
-never reuse the specifics. Lead: **Maya Chen, VP of Revenue, Driftwave** (fictional Series-A B2B
-dev-tools startup). Signal: closed a $12M Series A, hiring 4 AEs.
+A representative sequence for a fictional lead, validated with `lint_sequence.py`. Use as a
+template; never reuse the specifics. Lead: **Dan Kowalski, Director of Enterprise Applications,
+Meridian Foods** (fictional $2B food and beverage manufacturer on long-running Oracle EBS).
+Anchor: role + the detected platform. No trigger verdict in this example.
 
-Format: **3 short paragraphs separated by blank lines, no sign-off** (the Bison campaign appends the
-signature), **no em dashes**, and every CTA **leads with a give but asks for a meeting** (the give
-is delivered on the call).
+Built on the approved message set's logic: question opener, pattern stated generally (never
+about the recipient), the POV read as the only touch-1 ask, the assessment at touch 2, the
+20-minute ask at touch 3, and the Track B breakup. The known defect from the earlier live email
+("Congrats! I understand you have been running the same ERP for a decade or more") asserts a
+fact about the prospect and is exactly what this example replaces: state the pattern, then ask.
 
-## Step 1 — Subject: a signal play for Driftwave
-Maya, saw Driftwave closed its $12M Series A and is already hiring four AEs.
+Format: short paragraphs separated by blank lines, no sign-off (the Bison campaign appends the
+signature), no em dashes, one ask per email, subjects 2-4 reuse subject 1 as an RE: thread.
 
-Scaling pipeline that fast usually means more accounts in play than the team can cover before the new reps ramp, and that is where deals go cold. Our AI SDR researches, writes, and follows up autonomously, so coverage scales without new headcount: 3-5x more meetings per rep.
+## Step 1 — Subject: What's it costing to keep data nobody touches?
+Dan, a question I keep putting to people who own enterprise applications on long-standing Oracle EBS.
 
-I built a personalized signal play for Driftwave off your hiring and tech-stack signals, and accounts showing them tend to progress ~4.4x faster. Worth 15 minutes for me to walk you through it?
+How much of your database is history you have to keep for audit and tax but rarely touch, still on production infrastructure and backed up like your active data? In most EBS systems past ten years, that rarely-used history is the bigger share of the database. It costs the same as the data your team uses daily.
 
-## Step 2 — Subject: adding to Driftwave's run rate
-Maya, quick follow-up for Driftwave.
+If that is a live issue, I have written a short POV on how companies move that cold data off the running system while keeping it searchable. Want me to send it over?
 
-Post-raise, board expectations on pipeline jump faster than headcount can, and most teams already run sequences with reps at capacity. Our AI SDR ships its own email and LinkedIn sending infrastructure, so nothing about your current tools or process changes: it books meetings on autopilot while your reps stay on follow-up and closing, typically 2-5x on top of the current run rate.
+## Step 2 — Subject: RE: What's it costing to keep data nobody touches?
+Dan, following up on my note about historical ERP data.
 
-Worth 15 minutes? I'll calculate Driftwave's current meeting run rate, map the signal set you're already generating, and walk you through how many additional meetings that adds.
+Hardware buys time, not a fix. The data keeps growing, backups and clones grow with it, and the close stretches a little more each year. Moving the dormant history into a governed archive removes the cause, and the history stays searchable and audit-ready.
 
-## Step 3 — Subject: how Memgraph turned signals into pipeline
-Maya, last bit of proof for Driftwave.
+We run a free Data Lifecycle Assessment that puts a real number on it: your data-growth profile, archive candidates by module, a quantified cost-reduction opportunity, risk areas, and a phased roadmap. More here: www.valueglobal.net/archiving-solutions. Worth setting up?
 
-Memgraph came in signal-rich: reo.dev, 6sense, and product telemetry were surfacing more in-market accounts than the team could ever prospect. They pointed our AI SDR at that full signal set and it ran to $2.7M in qualified pipeline, 600 replies, and 60 BANT-qualified deals in 90 days, same team, live in four weeks.
+## Step 3 — Subject: RE: What's it costing to keep data nobody touches?
+Dan, one more thought on the assessment.
 
-Want to grab 15 minutes? We'll map Driftwave's signal sets, find the highest-yield sources, and I'll show you exactly where the AI SDR increases output.
+Scoping it takes a short call: which modules, roughly how much history, and what you would want the roadmap to cover. Twenty minutes does it.
 
-## Step 4 — Subject: should I close your file?
-Maya, I'll stop reaching out on this one, but didn't want to leave you empty-handed.
+Would Tuesday morning or Thursday afternoon work? If another window is better, name it and I will work around you.
 
-If scaling pipeline without adding headcount isn't a priority this quarter, no problem at all. Timing is everything right after a raise, and I know the fundraise-to-hiring stretch is its own kind of busy.
+## Step 4 — Subject: RE: What's it costing to keep data nobody touches?
+Dan, I will stop here rather than keep filling your inbox.
 
-Before I close your file, worth 15 minutes to walk through a one-page playbook of three AI-SDR plays scoped to a Series-A motion? I'll tailor it to Driftwave either way.
+If archiving old ERP data lands on your desk later this year, or on someone else's, the write-up is worth having. A two-minute read on what dormant ERP data costs and what companies do about it.
+
+Reply any time and I will send it. Happy to stay connected either way.
+
+## LinkedIn track (3 touches)
+
+**li_connect** (no pitch, a role-anchored question):
+> Dan, a question for someone who owns enterprise applications on long-running Oracle EBS. How much of the database is history you keep for audit but rarely touch? I write about the cost of cold ERP data and would value the connection.
+
+**li_msg1** (the approved opener, adapted to the role):
+> Hi Dan, a question I keep putting to leaders who own enterprise applications on long-standing Oracle EBS. How much of your database is history you have to keep but rarely touch, still on production infrastructure and backed up like your active data? In most EBS systems past 10 years, that rarely-used history is the bigger share of the database. It costs the same as the data your team uses daily. If that is a live issue, I have written a short POV on it. Want me to send it over?
+
+**li_msg2** (deliver the read, soft nudge):
+> Thanks for connecting, Dan. The POV I mentioned is a two-minute read. The chart on the first page is the whole point: in most long-running EBS systems the dormant history is around 70% of the database, at the same cost as the data you use every day. Want me to send it over?

@@ -4,12 +4,10 @@ import { Spinner, ErrorBanner, num } from '../components/ui.jsx'
 import InboxList from '../components/replies/InboxList.jsx'
 import ReplyDetail from '../components/replies/ReplyDetail.jsx'
 
+// VG runs a single default Bison campaign for now; per-variant campaigns can
+// be added here once created in Bison (the filter passes the raw id through).
 const CAMPAIGNS = [
   { id: '', label: 'All campaigns' },
-  { id: '10', label: '10 · sales-leadership' },
-  { id: '11', label: '11 · revops' },
-  { id: '12', label: '12 · partnerships' },
-  { id: '13', label: '13 · sdr-bdr' },
 ]
 const MIN_CONF = 0.50  // only interested/referral above this confidence surface for review
 

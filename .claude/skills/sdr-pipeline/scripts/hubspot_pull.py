@@ -21,29 +21,21 @@ from buyer_group import persona_for_title, buyer_role  # noqa: E402
 PROJECT_ROOT = SCRIPTS.parents[3]
 OUT_DIR = PROJECT_ROOT / "data" / "outreach"
 
-# Lightweight B2B software/tech heuristic (industry/company/website).
-TECH_HINTS = ("software", "saas", "technology", "tech", "information technology", "internet",
-              "computer", "it services", "platform", "cloud", "ai", "data", "cyber", "dev")
-
-
-def country_is_us(props):
-    """Tri-state: True = US, False = explicitly non-US, None = unknown (no data)."""
+def country_is_us_ca(props):
+    """Tri-state: True = US/Canada (VG's program scope), False = explicitly
+    elsewhere, None = unknown (no data)."""
     code = (props.get("hs_country_region_code") or "").strip().upper()
-    if code == "US":
+    if code in ("US", "CA"):
         return True
     if code:
-        return False  # an explicit non-US region code
+        return False  # an explicit non-US/CA region code
     c = (props.get("country") or "").strip().lower()
     if not c:
         return None  # no country data → keep (trust the list)
-    if "united states" in c or "usa" in c or c in {"us", "u.s.", "u.s.a.", "u.s"}:
+    if ("united states" in c or "usa" in c or "canada" in c
+            or c in {"us", "u.s.", "u.s.a.", "u.s", "ca"}):
         return True
     return False
-
-
-def is_tech(props):
-    blob = " ".join((props.get(k) or "") for k in ("industry", "company", "website", "domain")).lower()
-    return any(h in blob for h in TECH_HINTS)
 
 
 def main():
@@ -75,9 +67,8 @@ def main():
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     rows = []
-    skipped = {"non_icp": 0, "non_us": 0, "non_tech": 0, "no_email": 0, "suppressed": 0}
+    skipped = {"non_icp": 0, "non_us": 0, "no_email": 0, "suppressed": 0}
     kept_unknown_country = 0
-    has_industry = any((c.get("properties", {}).get("industry")) for c in contacts)
 
     for c in contacts:
         p = c.get("properties", {})
@@ -94,17 +85,15 @@ def main():
         if not p.get("email"):
             skipped["no_email"] += 1
             continue
-        # Geo: drop ONLY explicitly non-US; keep US and unknown-country (trust the list).
-        us = country_is_us(p)
+        # Geo: drop ONLY explicitly outside US/Canada; keep unknown (trust the list).
+        us = country_is_us_ca(p)
         if us is False:
             skipped["non_us"] += 1
             continue
         if us is None:
             kept_unknown_country += 1
-        # Industry filter only when the data exists; else trust the list.
-        if has_industry and not is_tech(p):
-            skipped["non_tech"] += 1
-            continue
+        # No industry filter: VG's ICP is industrial/enterprise, not B2B tech —
+        # industry fit is decided at the list level, not per pull.
         rows.append({
             "contact_id": c.get("id"),
             "first_name": p.get("firstname") or "",

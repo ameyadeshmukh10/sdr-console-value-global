@@ -33,10 +33,10 @@ for p in (str(PIPELINE_SCRIPTS), str(AISDR_SCRIPTS)):
 
 # persona id (contacts.persona / PERSONA_COLORS key) -> agent markdown file
 PERSONA_AGENT_FILES = {
-    "sales-leadership": "sdr-sales-leadership.md",
-    "revops": "sdr-revops.md",
-    "partnerships": "sdr-partnerships.md",
-    "sdr-bdr": "sdr-sdr-bdr-leadership.md",
+    "erp-owner": "sdr-erp-owner.md",
+    "dba": "sdr-dba.md",
+    "data-governance": "sdr-data-governance.md",
+    "it-leadership": "sdr-it-leadership.md",
 }
 
 ACRONYMS = {"cro": "CRO", "cso": "CSO", "cco": "CCO", "cmo": "CMO", "ceo": "CEO",
@@ -201,32 +201,34 @@ def _pipeline_section(root):
 def _icp_filter_section(root):
     import buyer_group as bg
     persona = bg._PERSONA_BY_ROLE
-    # mirrors buyer_role()'s 7-step precedence; regexes/personas read live
+    # mirrors buyer_role()'s precedence (VG buyer group); regexes/personas read live
     steps = [
-        ("CRO / Sales Chief", bg._CHIEF_REV, True, None),
-        ("SDR/BDR", bg._SDR_BDR, True, None),
-        ("RevOps/Sales Ops", bg._REVOPS, True, None),
-        ("Partnerships", bg._PARTNERSHIPS, True, None),
-        ("Sales / Revenue / GTM / BD", bg._SALES_FUNC, True,
-         "leadership titles → VP/Head/Dir Sales-GTM; the rest → Sales/BD IC & Ops"),
-        ("Marketing", bg._MKTG_FUNC, True,
-         "ICP only at leadership level (owns pipeline/SDRs); no persona yet → skipped"),
-        ("Founder/CEO", bg._FOUNDER, bool(bg.FOUNDERS_ARE_ICP),
-         "not ICP by the buyer-group definition (GTM leadership only)"),
+        ("Excluded (CEO / procurement / HR / legal)", bg._EXCLUDED, False,
+         "hard exclusions, checked first"),
+        ("GTM / sales / marketing", bg._GTM, False,
+         "the template's old ICP is this client's exclusion list; kept only when the "
+         "title also carries an IT/ERP/data function"),
+        ("ERP / application owner", bg._ERP_OWNER, True, "the primary target"),
+        ("Database owner", bg._DBA, True, None),
+        ("Data governance / records", bg._DATA_GOV, True, None),
+        ("Finance", bg._FINANCE, False, "out unless the title carries IT/ERP scope"),
+        ("IT leadership", bg._IT_LEAD, True,
+         "ICP at leadership level (CIO/VP/Director/Manager); unqualified IC IT titles "
+         "are not the buying group"),
     ]
     role_persona = {
-        "CRO / Sales Chief": persona.get("CRO / Sales Chief"),
-        "SDR/BDR": persona.get("SDR/BDR"),
-        "RevOps/Sales Ops": persona.get("RevOps/Sales Ops"),
-        "Partnerships": persona.get("Partnerships"),
-        "Sales / Revenue / GTM / BD": persona.get("VP/Head/Dir Sales-GTM"),
-        "Marketing": persona.get("Marketing-pipeline"),
-        "Founder/CEO": persona.get("Founder/CEO"),
+        "Excluded (CEO / procurement / HR / legal)": None,
+        "GTM / sales / marketing": None,
+        "ERP / application owner": persona.get("ERP/application owner"),
+        "Database owner": persona.get("Database owner"),
+        "Data governance / records": persona.get("Data governance"),
+        "Finance": None,
+        "IT leadership": persona.get("IT leadership"),
     }
     doc = (bg.__doc__ or "").strip().split("\n\n")[1] if bg.__doc__ else ""
     return {
         "definition": re.sub(r"\s+", " ", doc).strip(),
-        "founders_are_icp": bool(bg.FOUNDERS_ARE_ICP),
+        "founders_are_icp": False,
         "fallthrough": "any title matching none of these is NOT-ICP and is dropped at pull time",
         "roles": [{"order": i + 1, "role": role, "icp": icp,
                    "persona": role_persona.get(role), "note": note,
@@ -326,13 +328,21 @@ def _knowledge_section(root):
 
 
 LINT_LABELS = [
-    ("GIVE", "CTA must lead with a deliverable give"),
-    ("MEETING", "CTA must ask for a meeting"),
-    ("FORBIDDEN_CTA", "banned undeliverable gives (de-anon visitors, in-market lists)"),
-    ("DASH", "no em or en dashes"),
+    ("GIVE", "touch 1 offers only the read (POV / write-up / white paper)"),
+    ("MEETING", "call asks only in touch 3 (banned in touches 1-2)"),
+    ("FORBIDDEN_CTA", "banned offers (pilots, uncleared sample report)"),
+    ("DASH", "no em or en dashes (company-wide standard)"),
     ("SIGNOFF_LINE", "no trailing sign-off or name"),
-    ("BREAKUP", "final step must be a breakup"),
-    ("METRIC", "at least one concrete metric in the sequence"),
+    ("BREAKUP", "final step is a breakup that leaves the read on the table"),
+    ("BANNED", "ban list: purge, estate, production-access reassurance, AI-powered"),
+    ("HYPE", "no hype words"),
+    ("RECIPIENT_ASSERTION", "no facts asserted about the recipient (no Congrats, no '70% of your')"),
+    ("LICENSING_NUMBER", "no licensing/footprint percentages in cold copy"),
+    ("ANALYST_CLAIM", "no analyst citations for the 70% pattern"),
+    ("ORACLE_RELATIONSHIP", "no Oracle co-sell or partner claims"),
+    ("BOOKING", "no booking/scheduling links or tools"),
+    ("STATS", "at most two credibility stats per email"),
+    ("INFOCORVUS_FIGURES", "InfoCorvus figures carry the vendor attribution"),
     ("PRICING", "no pricing in cold steps"),
 ]
 
@@ -353,7 +363,7 @@ def _guardrails_section(root):
     return {
         "rules": rules,
         "lint_checks": checks,
-        "word_band": "70-110 words per email (aim 80-95)",
+        "word_band": "35-110 words per email (the approved set runs 45-105)",
         "enforced_at": "every generated sequence is linted at ingest; failures are fixed or blocked before enrollment",
     }
 

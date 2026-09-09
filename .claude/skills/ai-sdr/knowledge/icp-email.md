@@ -1,53 +1,76 @@
-# ICP Email Generation Rules (email channel, GTM-leadership buyers)
+# ICP Email Generation Rules (email channel, Value Global buyer group)
 
-How to write a 4-touch outbound email sequence for an ICP lead. Grounded in `offer.md`
-(product/proof) + `cta-offers.md` (the CTA) + the empirical winning patterns from our own replies
-(`analysis/sales-cohort-deepdive.md`, `cohort-playbook.md`). Scope: **email only, ICP buyer group
-only** (verify with `scripts/buyer_group.py`).
+How to write a 4-touch outbound email sequence for a Value Global ICP lead. Grounded in
+`offer.md` (the offer, proof, voice) + `cta-offers.md` (the offer ladder). Scope: **email only,
+ICP buyer group only** (ERP/application owners, database owners, data governance, IT
+leadership; verify with `scripts/buyer_group.py`). Messaging is uniform across seniority by
+client decision: write to the role, not a seniority script.
 
 ## Inputs the generator needs
 - Lead: first name, **title** (must pass `is_icp_buyer`), company.
-- A **real, recent company/GTM signal** (funding, hire, product/GTM launch, expansion, tech move).
-  No signal → don't fabricate; use a role-level pain hypothesis instead and flag for research.
-- Primary **give** chosen from `cta-offers.md` (Tier A by default).
+- Optional: a **detected on-prem ERP** (Oracle EBS, PeopleSoft, JD Edwards) from the tech scan,
+  and/or a **verified trigger verdict** (M&A carve-out, ERP migration, license audit, EBS on
+  OCI, EBS performance). No cold congrats-research: the anchor is the role + the pattern +
+  whatever verified context is provided. Industry is a filter, never a copy variant.
+
+## Subject rule
+- Subject 1 is the approved line, verbatim: **What's it costing to keep data nobody touches?**
+  (A trigger play may supply its own subject 1.) It is field-tested; do not replace it casually.
+- Subjects 2-4 are `RE: ` + subject 1, verbatim. The thread is the asset.
 
 ## The 4-touch structure
 | Step | Job | CTA |
 |---|---|---|
-| 1 | Personalized opener + the strongest value-first give | Tier-A give (account list / drafts) |
-| 2 | New angle, not a nag — when a hiring signal is provided, open email 2 on it (open-role count + 1-2 sales roles, tied to covering pipeline while the new reps ramp; skip if step 1's signal already covered hiring). When a sequencing play is flagged, one no-disruption line: own email + LinkedIn infra and capacity, their tools and process untouched, reps stay on follow-up and closing, 2-5x more meetings on top of the run rate (a single supporting line when hiring opened the email) | Run-rate + signal-set estimate (15 min) |
-| 3 | The Memgraph signal-activation proof: signal-rich (reo.dev, 6sense, product telemetry), more in-market accounts than the team could prospect, the AI SDR activated the full set. Name ONE detected intent/ABM tool when flagged; when only ad pixels are flagged, reference their ad investment generically (never name pixels); else tell the signal-set story on its own | Signal-mapping session (15 min) |
-| 4 | Breakup + soft give | "Should I close your file? Happy to leave {give} either way." |
+| 1 | Question opener: the cost-of-cold-data question, the 10/20/70 pattern stated about long-running EBS systems in general (never the recipient's), anchored to the person's verifiable role; name the detected ERP naturally when one is provided | The POV send-over ask only: "Want me to send it over?" or "Does that match what you are seeing?" |
+| 2 | The cost of doing nothing: the hardware treadmill, close and DR windows stretching, "hardware buys time, not a fix"; then the free Data Lifecycle Assessment described by its five deliverables | Propose the assessment + the link www.valueglobal.net/archiving-solutions |
+| 3 | No new argument, no new proof; short and specific | A 20-minute call to set the assessment up, two windows named in prose, never a booking link |
+| 4 | The breakup: concede timing, no pressing; leave the read on the table for them "or on someone else's desk" | "Reply any time and I will send it" |
 
-## Per-email recipe — write in 3 short paragraphs separated by BLANK LINES
-1. **Subject:** outcome-led, ~4–6 words, lowercase ok, no clickbait. E.g. *"pipeline {company} is leaving on the table"*, *"a signal play for {company}"*.
-2. **Paragraph 1 — opener (1–2 sentences):** name the **specific recent signal** — *"Saw {company} just {signal}."* Highest-leverage line (personalized openers = +30.5%).
-3. **Paragraph 2 — pain + value (2 sentences):** tie the signal to **scaling pipeline without adding headcount** (role-tuned), then one concrete deck-true metric (*"3–5x meetings per rep, no new hires"*). Include a metric.
-4. **Paragraph 3 — CTA (1–2 sentences):** a **give + a meeting ask** from `cta-offers.md`. Lead with the deliverable give, but **the give is delivered ON the meeting** — every CTA must ask for a quick call / 15 minutes / "walk you through it." Never "send it over, no call," and never a bare meeting ask with no give.
+## Per-email recipe — short paragraphs separated by BLANK LINES
+1. **Paragraph 1 — the question (1-2 sentences):** open with the question, never a claim.
+   "A question I keep putting to [role] running [platform / an ERP that has been in place for
+   many years]..." Anchor to the person's role, which is verifiable, not their systems, which
+   are not.
+2. **Paragraph 2 — the pattern (1-2 sentences):** state it generally: "In most long-running
+   EBS systems, that rarely-used history is the bigger share of the database. It costs the same
+   as the data your team uses daily."
+3. **Paragraph 3 — the ask (1 sentence):** exactly one ask, from the offer ladder for that
+   touch. End on the ask.
+4. When a detected ERP is provided, name it once, naturally, with the 15-to-20-years
+   data-volume angle as a question. Never mention scanning, detection, or how we know.
 
-## Formatting (critical — the old output got these wrong)
-- **Separate the 3 paragraphs with a blank line** (`\n\n` in the JSON). Do NOT write one dense block.
-- **NO sign-off and NO name at the end.** Do not end with "{first_name}", "Best,", "Thanks", or any
-  closer; the Email Bison campaign appends the sender's signature automatically. End on the CTA.
-- **NEVER use em dashes (—) or en dashes (–).** Use commas, periods, or colons instead. (Regular
-  hyphens in words like "tech-stack" or "3-5x" are fine.)
-- Plain text only. No markdown, no bullet lists.
+## Formatting
+- **Separate paragraphs with a blank line** (`\n\n` in the JSON). No dense blocks.
+- **NO sign-off and NO name at the end.** The Email Bison campaign appends the sender's
+  signature (sender identity: Value Global business development; being finalized). End on the ask.
+- **NEVER use em dashes (—) or en dashes (–).** Company-wide standard: commas, colons, or a
+  full stop. (Regular hyphens in words like "month-end" are fine.)
+- Plain text only. No markdown, no bullet lists, no images (the campaign template carries the
+  10/20/70 infographic).
 
 ## Hard guardrails (enforced by `lint_sequence.py`)
-- **70–110 words** per email (sweet spot ~75–95). **One** ask. Paragraph breaks required.
-- Step-1 opener references the company/signal by name (personalized).
-- ≥1 concrete metric somewhere in the sequence.
-- CTA **asks for a meeting AND anchors it on a deliverable give** (no "send it over, no call"; no
-  bare "got 15 min"; no "send your visitors / 25 in-market accounts" — see `cta-offers.md`).
-- Step 4 is a **breakup**.
-- **No pricing/discount language in cold steps** (pricing only in replies, on a direct ask).
-- **No trailing first-name sign-off.** Every product claim traceable to `offer.md`.
+- **35-110 words** per email (the approved set runs about 45-105). **One** ask per email.
+- Step 1 must open on a question and must NOT ask for a meeting, the assessment, a pilot, or
+  anything beyond permission to send the read.
+- Never assert a fact about the recipient's environment: no "70% of your database", no "you
+  have been running the same ERP for a decade", no "Congrats" opener.
+- Step 3 is the only step that may ask for a call. Step 4 must be a breakup that leaves the
+  asset available.
+- The only links allowed: www.valueglobal.net/archiving-solutions and the assessment demo
+  (https://vg-ebs-archiving-assessment-demo.netlify.app/index.html). Never valueglobal.com,
+  never a booking link.
+- At most TWO credibility stats per email. Every InfoCorvus figure carries its attribution.
+- The licensing rule: never claim archiving cuts the Oracle license for a customer staying on
+  EBS; license-to-zero belongs to Full Retirement only. No "85%" or "80%" figures in cold copy.
+- No pricing in any cold step. No production-access reassurance, ever.
+- Banned terms per `offer.md`: purge, estate, hype words, "AI-powered", "85-95% dormant",
+  analyst citations, Oracle co-sell claims.
+- Every product claim traceable to `offer.md`.
 
 ## Tone
-Peer-to-peer, concise, confident, zero fluff. Emulate the verbatim winners in
-`analysis/sales-cohort-deepdive.md` (e.g. *"I noticed Storylane shipped Storylane 2.0… balancing
-high-volume outreach with personalized demo follow-up"*) — **emulate the shape, never copy text or
-reuse another company's specifics.**
+A consultant who has done this work for twenty years talking to a peer. Short sentences,
+concrete nouns, no hype. Emulate the three sample openers in `offer.md` and the gold example
+in `examples/icp-email-sequence.md`: emulate the shape, never copy a real prospect's specifics.
 
 ## Output format (so the linter can read it)
 Markdown, one block per step:

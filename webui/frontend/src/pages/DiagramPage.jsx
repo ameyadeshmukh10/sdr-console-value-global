@@ -13,12 +13,12 @@ import {
 // unenrollment checker. Numbers live on other pages; every node opens its
 // "under the hood" section below, populated live from the repo config.
 
-const PERSONAS = ['sales-leadership', 'revops', 'partnerships', 'sdr-bdr']
+const PERSONAS = ['erp-owner', 'dba', 'data-governance', 'it-leadership']
 const AGENT = {
-  'sales-leadership': 'sdr-sales-leadership',
-  'revops': 'sdr-revops',
-  'partnerships': 'sdr-partnerships',
-  'sdr-bdr': 'sdr-sdr-bdr-leadership',
+  'erp-owner': 'sdr-erp-owner',
+  'dba': 'sdr-dba',
+  'data-governance': 'sdr-data-governance',
+  'it-leadership': 'sdr-it-leadership',
 }
 
 // horizontal-tangent bezier (left edge -> right edge of nodes)

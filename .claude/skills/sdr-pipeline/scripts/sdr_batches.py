@@ -244,6 +244,62 @@ def cmd_enroll(args):
             print(f"enroll: all contacts suppressed. {counts}")
             return 0
 
+    # Account suppression backstop (client do-not-contact list + the Fusion
+    # rule). Both are already enforced at CSV ingest and the segment gate;
+    # this catches rules loaded AFTER contacts entered the pipeline, and any
+    # path that skipped the gates.
+    import suppression as S  # noqa: E402 (stdlib-only module import)
+    sup_rules = S.load_rules(conn)
+    sig_rows = {}
+    doms = sorted({r["domain"] for r in rows if r.get("domain")})
+    if doms:
+        qmarks = ",".join("?" * len(doms))
+        for sr in conn.execute(
+                f"SELECT domain, tech_signals, tech_detail, tech_checked_at "
+                f"FROM account_signals WHERE domain IN ({qmarks})", doms):
+            sig_rows[sr["domain"]] = dict(sr)
+    kept = []
+    for r in rows:
+        rule, kind = S.match(r.get("company") or "", r.get("domain") or "", sup_rules)
+        reason = None
+        if rule and kind in ("exact", "domain", "containment"):
+            reason = f"suppressed: account list — {rule['name']}"
+        elif S.fusion_only_detected(sig_rows.get(r.get("domain"))) is True:
+            reason = "suppressed: Fusion-only detection"
+        if reason:
+            counts["suppressed"] += 1
+            if args.dry_run:
+                print(f"  [suppressed] {r['email']} — {reason}, will not enroll")
+            else:
+                db.set_contact_status(conn, r["contact_id"], "skipped", error=reason)
+                print(f"  [suppressed] {r['email']} — {reason}, skipped")
+        else:
+            kept.append(r)
+    rows = kept
+    if not rows:
+        print(f"enroll: all contacts suppressed. {counts}")
+        return 0
+
+    # Monthly volume guardrail (client program: 1,500-3,000 contacts/month,
+    # depth over volume). Counts contacts stamped enrolled_at this calendar
+    # month; truncates this run at the remainder and refuses at the cap.
+    cap = int(os.environ.get("ENROLL_MONTHLY_CAP", "3000") or 3000)
+    if cap > 0:
+        month_start = db.now()[:7] + "-01T00:00:00Z"
+        used = conn.execute(
+            "SELECT COUNT(*) FROM contacts WHERE status='enrolled' "
+            "AND enrolled_at IS NOT NULL AND enrolled_at >= ?", (month_start,)).fetchone()[0]
+        remaining = cap - used
+        if remaining <= 0:
+            print(f"enroll: monthly cap reached ({used}/{cap} this month) — nothing enrolled. "
+                  f"Raise ENROLL_MONTHLY_CAP only with the client's sign-off.")
+            return 0
+        if len(rows) > remaining:
+            counts["deferred_over_cap"] = len(rows) - remaining
+            print(f"note: monthly cap {used}/{cap} — enrolling {remaining} of {len(rows)} "
+                  f"eligible contacts, deferring {len(rows) - remaining}.")
+            rows = rows[:remaining]
+
     # Resolve campaign + copy per contact (local, fast). Skip missing-file /
     # no-campaign here so the network phase only sees real work. Build the
     # HeyReach pair now too (local) — it's batch-added after a successful enroll.

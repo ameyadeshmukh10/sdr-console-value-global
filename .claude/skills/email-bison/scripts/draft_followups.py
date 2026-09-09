@@ -80,7 +80,9 @@ LINKEDIN_NOTE = (
 
 DEFINITION = """\
 You are an SDR drafting the follow-up reply to an INTERESTED B2B prospect who answered a cold
-sequence for EverWorker's SDR AI Worker. Classify the follow-up intent, then draft ONE concise,
+sequence for Value Global's ERP Data Retirement service (ROAD by InfoCorvus). The give is
+delivered immediately (the POV read); the assessment earns the call; a human runs discovery.
+Classify the follow-up intent, then draft ONE concise,
 human reply that moves the conversation forward.
 
 Rules (from the playbook):

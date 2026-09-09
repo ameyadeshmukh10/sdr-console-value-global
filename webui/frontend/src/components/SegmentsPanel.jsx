@@ -130,10 +130,16 @@ export default function SegmentsPanel({ onChanged, onGeneration }) {
               {segs.map((s) => (
                 <tr key={s.id}>
                   <td onClick={(e) => e.stopPropagation()}>
-                    <input type="checkbox" checked={!!selected[s.id]} style={{ width: 'auto' }}
-                      onChange={(e) => setSelected((m) => ({ ...m, [s.id]: e.target.checked }))} />
+                    {s.id !== 'suppressed' && (
+                      <input type="checkbox" checked={!!selected[s.id]} style={{ width: 'auto' }}
+                        onChange={(e) => setSelected((m) => ({ ...m, [s.id]: e.target.checked }))} />
+                    )}
                   </td>
-                  <td><b>{s.label}</b>{s.kind === 'trigger' && <span className="badge cta" style={{ marginLeft: 8 }}>trigger copy</span>}</td>
+                  <td>
+                    <b>{s.label}</b>
+                    {s.kind === 'trigger' && <span className="badge cta" style={{ marginLeft: 8 }}>trigger copy</span>}
+                    {s.id === 'suppressed' && <span className="badge danger" style={{ marginLeft: 8 }}>do not contact</span>}
+                  </td>
                   <td>{num(s.accounts.length)}</td>
                   <td className="muted">{num(s.contact_total)}</td>
                   <td>
@@ -142,9 +148,11 @@ export default function SegmentsPanel({ onChanged, onGeneration }) {
                     </button>
                   </td>
                   <td>
-                    <button className="sm" disabled={!!busy} onClick={() => approve({ segments: [s.id] }, s.id)}>
-                      {busy === s.id ? <Spinner /> : 'Approve segment'}
-                    </button>
+                    {s.id !== 'suppressed' && (
+                      <button className="sm" disabled={!!busy} onClick={() => approve({ segments: [s.id] }, s.id)}>
+                        {busy === s.id ? <Spinner /> : 'Approve segment'}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -164,6 +172,16 @@ export default function SegmentsPanel({ onChanged, onGeneration }) {
                         <td>
                           <span className="mono">{a.domain}</span>
                           {a.company && <span className="muted" style={{ marginLeft: 8 }}>{a.company}</span>}
+                          {a.flags && Object.entries(a.flags).map(([f, n]) => (
+                            <span key={f} className="badge muted" style={{ marginLeft: 6, fontSize: 10 }}
+                              title="import-time quality flag">{n > 1 ? `${n}× ` : ''}{f.replace(/_/g, ' ')}</span>
+                          ))}
+                          {a.suppression_review && (
+                            <span className="badge danger" style={{ marginLeft: 6, fontSize: 10 }}
+                              title="Close to a do-not-contact rule — check before approving">
+                              near-miss: {a.suppression_review.rule}
+                            </span>
+                          )}
                         </td>
                         <td>{num(a.contacts)}</td>
                         {s.kind === 'trigger' && <td>{a.score ?? '—'}</td>}
@@ -184,8 +202,8 @@ export default function SegmentsPanel({ onChanged, onGeneration }) {
               </button>
             )}
             <button className="ghost" disabled={!!busy} onClick={() => approve({ all: true }, 'all')}
-              title="Approves every awaiting account, researched or not (unresearched ones use the default copy path)">
-              {busy === 'all' ? <Spinner /> : `Approve all (${num(data.accounts)} accounts)`}
+              title="Approves every awaiting account, researched or not (unresearched ones use the default copy path). Suppressed accounts are always excluded.">
+              {busy === 'all' ? <Spinner /> : `Approve all (${num(Math.max(0, data.accounts - (segs.find((x) => x.id === 'suppressed')?.accounts.length || 0)))} accounts)`}
             </button>
           </div>
         </>

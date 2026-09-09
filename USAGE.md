@@ -1,11 +1,7 @@
-# USAGE — SDR Pipeline & Analysis Commands
+# USAGE — SDR Pipeline & Analysis Commands (Value Global)
 
-Quick reference for running everything yourself from the terminal. All commands assume you are in the
-project root:
-
-```bash
-cd "/Users/ameyadeshmukh/Documents/sdraiworker/reply management"
-```
+Quick reference for running everything yourself from the terminal. All commands assume you are
+in the project root.
 
 Everything is pure Python standard library — **no installs needed**. Secrets/config live in `.env`.
 
@@ -16,14 +12,15 @@ Everything is pure Python standard library — **no installs needed**. Secrets/c
 | Variable | What it is | Status |
 |---|---|---|
 | `EMAILBISON_API_KEY` / `EMAILBISON_BASE_URL` | Bison token + instance (`send.everworker.ai`) | ✅ set |
-| `HUBSPOT_ACCESS_TOKEN` / `HUBSPOT_BASE_URL` | HubSpot private-app token (`api.hubapi.com`) | ✅ set |
-| `HUBSPOT_LIST_ID` | The HubSpot list to pull | ✅ `2198` |
-| `HUBSPOT_LINKEDIN_PROPERTY` | Contact property holding the LinkedIn URL | `hs_linkedin_url` |
-| `BISON_CAMPAIGN_SALES_LEADERSHIP/_REVOPS/_PARTNERSHIPS/_SDR_BDR` | Per-persona email campaigns | ✅ `10 / 11 / 12 / 13` |
+| `BISON_CAMPAIGN_ID` | The Value Global Bison campaign (single-campaign routing) | ⬜ set once the VG campaign exists |
+| `ENROLL_MONTHLY_CAP` | Monthly enrollment guardrail (client program: 1,500-3,000/month) | default `3000` |
+| `HUBSPOT_*` | Dormant — the client has no CRM for this engagement | ⬜ unset |
 | `HEYREACH_API_KEY` / `HEYREACH_BASE_URL` | HeyReach (LinkedIn) | ✅ set |
-| `HEYREACH_CAMPAIGN_ID` / `HEYREACH_LINKEDIN_ACCOUNT_ID` | LinkedIn campaign + sender | ⬜ blank (LinkedIn deferred) |
+| `HEYREACH_CAMPAIGN_ID` / `HEYREACH_LINKEDIN_ACCOUNT_ID` | LinkedIn campaign + sender | ⬜ blank (LinkedIn deferred until the client's profiles are ready) |
 
-**Persona → Bison campaign:** sales-leadership→**10**, revops→**11**, partnerships→**12**, sdr-bdr→**13**.
+**Personas** (`erp-owner` / `dba` / `data-governance` / `it-leadership`) share one uniform
+message set; enrollment falls through to `BISON_CAMPAIGN_ID`. Load the client's do-not-contact
+list (`suppression.py load`) before any send.
 
 ---
 

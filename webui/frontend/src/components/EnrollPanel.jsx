@@ -1,12 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import { Spinner, ErrorBanner, num } from './ui.jsx'
 import OutreachDetail from './OutreachDetail.jsx'
 
-// campaigns now route by variant (14/15/16); 10-13 are the legacy persona campaigns
+// campaigns route by variant first, then persona, then BISON_CAMPAIGN_ID —
+// this map only labels known campaign ids in the preview (VG runs a single
+// default campaign until per-variant campaigns are created in Bison)
 const CAMPAIGN_PERSONA = {
   14: 'value-give', 15: 'earn', 16: 'show',
-  10: 'sales-leadership', 11: 'revops', 12: 'partnerships', 13: 'sdr-bdr',
 }
 
 // Enrollment with a dry-run gate: always preview first, then a confirm modal
@@ -22,6 +23,12 @@ export default function EnrollPanel({ generatedReady, awaitingApproval = 0, onCh
   const [error, setError] = useState(null)
   const [confirming, setConfirming] = useState(false)
   const [ack, setAck] = useState(false)
+  const [monthly, setMonthly] = useState(null)
+
+  useEffect(() => {
+    api.status().then((s) => setMonthly({ used: s.enrolled_this_month, cap: s.monthly_cap }))
+      .catch(() => {})
+  }, [result])
 
   async function runDryRun() {
     setBusy(true); setError(null); setResult(null); setPreview(null)
@@ -53,6 +60,12 @@ export default function EnrollPanel({ generatedReady, awaitingApproval = 0, onCh
             <span className="badge" style={{ color: 'var(--amber)', borderColor: 'var(--amber)' }}
               title="Generated copy still at the review gate — approve it on the Outreach tab">
               {num(awaitingApproval)} awaiting approval
+            </span>
+          )}
+          {monthly?.cap > 0 && monthly.used != null && (
+            <span className="badge muted"
+              title="Program guardrail: 1,500-3,000 contacts/month, depth over volume. Enrollment refuses past the cap.">
+              {num(monthly.used)} / {num(monthly.cap)} this month
             </span>
           )}
         </span>
