@@ -74,10 +74,10 @@ def heyreach_account_for(accounts, contact_id):
 
 # Per-persona Bison campaign routing (legacy; kept as a fallback).
 PERSONA_CAMPAIGN_ENV = {
-    "sales-leadership": "BISON_CAMPAIGN_SALES_LEADERSHIP",
-    "revops": "BISON_CAMPAIGN_REVOPS",
-    "partnerships": "BISON_CAMPAIGN_PARTNERSHIPS",
-    "sdr-bdr": "BISON_CAMPAIGN_SDR_BDR",
+    "erp-owner": "BISON_CAMPAIGN_ERP_OWNER",
+    "dba": "BISON_CAMPAIGN_DBA",
+    "data-governance": "BISON_CAMPAIGN_DATA_GOVERNANCE",
+    "it-leadership": "BISON_CAMPAIGN_IT_LEADERSHIP",
 }
 
 # Per-variant Bison campaign routing — one dedicated campaign per instruction set,

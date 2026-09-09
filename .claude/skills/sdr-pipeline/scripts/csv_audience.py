@@ -6,7 +6,7 @@ website, industry, employee count — flexible header spellings), the server sav
 it under data/outreach/csv-uploads/<audience_id>.csv and shells out here; this
 script parses/normalizes the rows, dedups (in-file + against pipeline.db by
 email), assigns a persona per job title (unmatched titles default to
-sales-leadership — a hand-picked upload is trusted, unlike a HubSpot list pull),
+it-leadership — a hand-picked upload is trusted, unlike a HubSpot list pull),
 inserts the contacts with synthetic ids `csv-<suffix>-<n>` (NOT HubSpot ids —
 every HubSpot write-back skips or best-effort-fails them by design), and batches
 them exactly like `sdr_batches.py init`. Downstream — generation, enrollment
@@ -40,7 +40,7 @@ import suppression                               # noqa: E402
 from buyer_group import persona_for_title        # noqa: E402
 
 MAX_ROWS = 50_000          # sanity cap — an accidental giant export, not a DoS guard
-DEFAULT_PERSONA = "sales-leadership"  # broadest persona; used when a title matches none
+DEFAULT_PERSONA = "it-leadership"  # broadest persona; used when a title matches none
 
 # ---- import-time lead validation (VG, 2026-09) -------------------------------
 # The program is US + Canada only, >=1,000 employees, no healthcare providers,
@@ -374,11 +374,11 @@ def self_test():
     sample = (
         "﻿First Name;Last Name;Job Title;Email Address;LinkedIn Profile URL;"
         "Country;Company Name;Company Website;Company Industry;Company Number of Employees\n"
-        "Ada;Lovelace;VP of Sales;ada@acme.com;www.linkedin.com/in/ada;US;Acme;"
-        "https://www.acme.com/about;Software;1,001 - 5,000 employees\n"
+        "Ada;Lovelace;ERP Program Manager;ada@acme.com;www.linkedin.com/in/ada;US;Acme;"
+        "https://www.acme.com/about;Machinery;1,001 - 5,000 employees\n"
         "Bob;Jones;Chief Fun Officer;bob@gmail.com;;DE;Globex;globex.de;Manufacturing;90\n"
-        "Ada;Dup;VP of Sales;ADA@acme.com;;US;Acme;;Software;250\n"
-        "NoMail;Person;CRO;;;US;Initech;;;\n"
+        "Ada;Dup;ERP Program Manager;ADA@acme.com;;US;Acme;;Machinery;250\n"
+        "NoMail;Person;CIO;;;US;Initech;;;\n"
         "Cara;Nurse;IT Director;cara@mercy.org;;;Mercy;mercy.org;"
         "Hospital & Health Care;501 - 1,000 employees\n"
     )
@@ -389,9 +389,9 @@ def self_test():
     assert len(contacts) == 3, f"expected 3 contacts, got {len(contacts)}"
     base = {k: v for k, v in counts.items() if k != "flag_counts"}
     assert base == {"rows": 5, "no_email": 1, "duplicate_in_file": 1,
-                    "persona_defaulted": 2}, base
+                    "persona_defaulted": 1}, base
     ada, bob, cara = contacts
-    assert ada["contact_id"] == "csv-deadbeef-1" and ada["persona"] == "sales-leadership"
+    assert ada["contact_id"] == "csv-deadbeef-1" and ada["persona"] == "erp-owner"
     assert ada["domain"] == "acme.com", ada["domain"]
     assert ada["linkedin_url"] == "https://www.linkedin.com/in/ada", ada["linkedin_url"]
     assert ada["country"] == "US" and ada["employees"] == "1,001 - 5,000 employees"

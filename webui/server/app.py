@@ -117,10 +117,10 @@ import orchestration_config           # noqa: E402  (no I/O at import; parses on
 import suppression                    # noqa: E402  (account do-not-contact + Fusion rule)
 
 PERSONA_ENV = {
-    "sales-leadership": "BISON_CAMPAIGN_SALES_LEADERSHIP",
-    "revops": "BISON_CAMPAIGN_REVOPS",
-    "partnerships": "BISON_CAMPAIGN_PARTNERSHIPS",
-    "sdr-bdr": "BISON_CAMPAIGN_SDR_BDR",
+    "erp-owner": "BISON_CAMPAIGN_ERP_OWNER",
+    "dba": "BISON_CAMPAIGN_DBA",
+    "data-governance": "BISON_CAMPAIGN_DATA_GOVERNANCE",
+    "it-leadership": "BISON_CAMPAIGN_IT_LEADERSHIP",
 }
 # Per-instruction-variant Bison campaigns. Enrollment routes by variant FIRST and
 # only falls back to the persona campaign (then the default BISON_CAMPAIGN_ID), so

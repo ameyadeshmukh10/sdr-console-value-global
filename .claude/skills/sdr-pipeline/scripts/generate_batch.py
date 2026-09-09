@@ -41,19 +41,22 @@ SDR_BATCHES = HERE / "sdr_batches.py"
 MAX_ATTEMPTS = 3
 MAX_WORKERS = 4
 
+# Messaging is UNIFORM across the buying group by client decision (2026-09
+# kick-off): personas gate ICP entry and drive reporting, not copy variants.
+# One framing, four keys, so persona routing keeps working end to end.
+_VG_FRAMING = (
+    "Frame the pain as decades of dormant transactional history riding on production "
+    "infrastructure at full cost: the hardware treadmill, batch runs and month-end close "
+    "slowing down, audit and retention obligations nobody wants to own. "
+    "Gives: touch 1 the short POV read (send-over ask only), touch 2 the free Data "
+    "Lifecycle Assessment, touch 3 a 20-minute call to set it up, touch 4 a breakup that "
+    "leaves the read on the table. Write to the role in the title, not a seniority script."
+)
 PERSONA_FRAMING = {
-    "sales-leadership": "Frame the pain as coverage/quota: more pipeline per rep without hiring. "
-                        "Gives: signal play, run-rate + signal-set estimate, signal-mapping session, "
-                        "pipeline gap analysis, pilot playbook (breakup).",
-    "revops": "Frame the pain as signal-to-action latency, data hygiene, measurable lift. "
-              "Gives: signal-mapping session, run-rate + signal-set estimate, pipeline gap analysis, "
-              "signal play, outbound teardown.",
-    "partnerships": "Frame the pain as co-sell / partner-sourced pipeline coverage at scale. "
-                    "Gives: signal play (partner ecosystem), co-sell pilot playbook, run-rate + "
-                    "signal-set estimate, signal-mapping session, 3 personalized drafts.",
-    "sdr-bdr": "Frame the pain as follow-up volume, ramp time, response speed. "
-               "Gives: 3 personalized drafts, run-rate + signal-set estimate, signal play, "
-               "signal-mapping session, outbound teardown.",
+    "erp-owner": _VG_FRAMING,
+    "dba": _VG_FRAMING,
+    "data-governance": _VG_FRAMING,
+    "it-leadership": _VG_FRAMING,
 }
 
 # Shared research block — all variants research the same way; only the writing (Step 3) differs.
@@ -389,7 +392,7 @@ def generate_contact_erp(contact, segment, verdict, client, write=True, tech_lin
     """Generate one trigger-anchored contact (write-only, no web search — the
     verdict IS the research). Same retry/lint/write contract as
     generate_contact; the asset carries variant 'erp-trigger'."""
-    cid, persona = contact["contact_id"], contact.get("persona", "sales-leadership")
+    cid, persona = contact["contact_id"], contact.get("persona", "it-leadership")
     signal = erp_signal_line(segment, verdict)
     issues, last_asset = ["no output"], None
     cache_read = cache_write = 0
@@ -492,8 +495,8 @@ def build_system(knowledge, variant=DEFAULT_VARIANT, mode="research"):
 
 def build_user(contact, cached_signal=None, prior_issues=None, tech_signals=None,
                tech_playbook=None, hiring_signals=None):
-    persona = contact.get("persona", "sales-leadership")
-    framing = PERSONA_FRAMING.get(persona, PERSONA_FRAMING["sales-leadership"])
+    persona = contact.get("persona", "it-leadership")
+    framing = PERSONA_FRAMING.get(persona, PERSONA_FRAMING["it-leadership"])
     domain = contact.get("domain") or db.email_domain(contact.get("email"))
     base = (
         f"Contact:\n"
@@ -685,7 +688,7 @@ def generate_contact(contact, knowledge, client, write=True, cached_signal=None,
     write=False skips the file write (used by --contact-test); the asset is
     still returned under result["asset"].
     """
-    cid, persona = contact["contact_id"], contact.get("persona", "sales-leadership")
+    cid, persona = contact["contact_id"], contact.get("persona", "it-leadership")
     mode = "write" if cached_signal else "research"
     use_search = cached_signal is None
     linter = LINTERS.get(variant, lint_email)
@@ -1085,7 +1088,7 @@ def process_batch_result(custom_id, result, manifest):
     if not entry:
         return {"status": "error", "issues": ["unknown custom_id"]}
     contact = entry["contact"]
-    cid, persona = contact["contact_id"], contact.get("persona", "sales-leadership")
+    cid, persona = contact["contact_id"], contact.get("persona", "it-leadership")
     domain, cached_signal = entry["domain"], entry.get("cached_signal")
     variant = entry.get("variant", DEFAULT_VARIANT)
 
@@ -1193,7 +1196,7 @@ def contact_test():
         "last_name": "Test",
         "title": args[1] if len(args) > 1 else "VP of Sales",
         "company": args[0] if len(args) > 0 else "Ramp",
-        "persona": args[2] if len(args) > 2 else "sales-leadership",
+        "persona": args[2] if len(args) > 2 else "it-leadership",
         "linkedin_url": "",
     }
     print(f"generating [{variant}] test copy for {contact['first_name']} @ {contact['company']} "

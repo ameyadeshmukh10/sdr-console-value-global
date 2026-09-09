@@ -17,10 +17,10 @@ export const BRAND = {
 
 // persona hues — mirror styles.css --p-* tokens
 export const PERSONA_COLORS = {
-  'sales-leadership': '#146c7a',
-  'revops': '#2f6db5',
-  'partnerships': '#6d5dd3',
-  'sdr-bdr': '#b8791f',
+  'erp-owner': '#146c7a',
+  'dba': '#2f6db5',
+  'data-governance': '#6d5dd3',
+  'it-leadership': '#b8791f',
 }
 
 // ordered series palette for multi-series charts (green-led, brand-harmonized)
