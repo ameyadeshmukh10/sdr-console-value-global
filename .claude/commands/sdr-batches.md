@@ -1,5 +1,5 @@
 ---
-description: Batch the HubSpot ICP contacts (25/batch), dispatch batch-runner sub-agents in parallel to generate value-anchored meeting-CTA copy, then enroll into Bison.
+description: Batch the ICP contacts (25/batch), dispatch batch-runner sub-agents in parallel to generate Value Global ERP Data Retirement copy, then enroll into Bison.
 argument-hint: "[N batches | all] [enroll]"
 allowed-tools: Bash, Task
 ---

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import { Spinner, ErrorBanner, num } from './ui.jsx'
 import OutreachDetail from './OutreachDetail.jsx'
@@ -23,6 +23,12 @@ export default function EnrollPanel({ generatedReady, awaitingApproval = 0, onCh
   const [error, setError] = useState(null)
   const [confirming, setConfirming] = useState(false)
   const [ack, setAck] = useState(false)
+  const [monthly, setMonthly] = useState(null)
+
+  useEffect(() => {
+    api.status().then((s) => setMonthly({ used: s.enrolled_this_month, cap: s.monthly_cap }))
+      .catch(() => {})
+  }, [result])
 
   async function runDryRun() {
     setBusy(true); setError(null); setResult(null); setPreview(null)
@@ -54,6 +60,12 @@ export default function EnrollPanel({ generatedReady, awaitingApproval = 0, onCh
             <span className="badge" style={{ color: 'var(--amber)', borderColor: 'var(--amber)' }}
               title="Generated copy still at the review gate — approve it on the Outreach tab">
               {num(awaitingApproval)} awaiting approval
+            </span>
+          )}
+          {monthly?.cap > 0 && monthly.used != null && (
+            <span className="badge muted"
+              title="Program guardrail: 1,500-3,000 contacts/month, depth over volume. Enrollment refuses past the cap.">
+              {num(monthly.used)} / {num(monthly.cap)} this month
             </span>
           )}
         </span>

@@ -328,13 +328,21 @@ def _knowledge_section(root):
 
 
 LINT_LABELS = [
-    ("GIVE", "CTA must lead with a deliverable give"),
-    ("MEETING", "CTA must ask for a meeting"),
-    ("FORBIDDEN_CTA", "banned undeliverable gives (de-anon visitors, in-market lists)"),
-    ("DASH", "no em or en dashes"),
+    ("GIVE", "touch 1 offers only the read (POV / write-up / white paper)"),
+    ("MEETING", "call asks only in touch 3 (banned in touches 1-2)"),
+    ("FORBIDDEN_CTA", "banned offers (pilots, uncleared sample report)"),
+    ("DASH", "no em or en dashes (company-wide standard)"),
     ("SIGNOFF_LINE", "no trailing sign-off or name"),
-    ("BREAKUP", "final step must be a breakup"),
-    ("METRIC", "at least one concrete metric in the sequence"),
+    ("BREAKUP", "final step is a breakup that leaves the read on the table"),
+    ("BANNED", "ban list: purge, estate, production-access reassurance, AI-powered"),
+    ("HYPE", "no hype words"),
+    ("RECIPIENT_ASSERTION", "no facts asserted about the recipient (no Congrats, no '70% of your')"),
+    ("LICENSING_NUMBER", "no licensing/footprint percentages in cold copy"),
+    ("ANALYST_CLAIM", "no analyst citations for the 70% pattern"),
+    ("ORACLE_RELATIONSHIP", "no Oracle co-sell or partner claims"),
+    ("BOOKING", "no booking/scheduling links or tools"),
+    ("STATS", "at most two credibility stats per email"),
+    ("INFOCORVUS_FIGURES", "InfoCorvus figures carry the vendor attribution"),
     ("PRICING", "no pricing in cold steps"),
 ]
 
@@ -355,7 +363,7 @@ def _guardrails_section(root):
     return {
         "rules": rules,
         "lint_checks": checks,
-        "word_band": "70-110 words per email (aim 80-95)",
+        "word_band": "35-110 words per email (the approved set runs 45-105)",
         "enforced_at": "every generated sequence is linted at ingest; failures are fixed or blocked before enrollment",
     }
 

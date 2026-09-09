@@ -1,72 +1,66 @@
-# Value-Anchored CTA / Offer Library
+# The Offer Ladder — CTAs for Value Global ERP Data Retirement
 
-The core of "offers testing." An **offer** here = the **CTA inside the email**. We lead with a
-valuable give, but **the give is delivered ON a meeting** — our SDR team does nothing until a
-meeting is booked. So every CTA **anchors a meeting ask on the value**: the give is the reason to
-take the call, not a freebie sent cold.
+An **offer** here = the CTA give inside the email. The design is the opposite of a
+meeting-gated motion: **the give is delivered without a meeting**. The read earns the reply,
+the assessment earns the call, and the call is run by a human (Nirmiti). Every hard rule below
+is the product of a documented failure in Value Global's own outreach.
 
 **Hard rules:**
-- **Every CTA must ask for a meeting** (15 min, quick call, "walk you through"). No "send it over,
-  no call" — we don't deliver anything until we're talking.
-- **Anchor the meeting on a real, deliverable give** (something we can actually show on the call).
-- Do NOT promise a prospect their own "de-anonymized visitors" or "25 in-market accounts" — fake.
+- **Touch 1 asks ONLY for permission to send a short read.** Never a meeting, never the
+  assessment, never a pilot, never price.
+- **No booking or scheduling links anywhere.** The touch-3 call ask names two windows in prose.
+- The ask escalates read → assessment → short call. One ask per email.
 
-## Why value-anchored meeting asks win
-GTM leaders ignore "got 15 minutes?" because it gives them nothing. They take a call when there's
-something specific and useful waiting on the other side. Lead with the give, make the meeting the
-way to get it.
+## The offer ladder
 
-## The library (give + meeting ask)
+| Touch | The give | The ask |
+|---|---|---|
+| 1 | The point of view (a short two-page read on the cost of dormant ERP data) | "Want me to send it over?" or "Does that match what you are seeing?" |
+| 2 | Cost of doing nothing + the free EBS Data Lifecycle Assessment, described by its five deliverables, with the link www.valueglobal.net/archiving-solutions | Propose the assessment |
+| 3 | Nothing new | A short 20-minute call to set the assessment up, two windows named in prose |
+| 4 | The breakup leaves the read on the table | "Reply any time and I will send it" |
 
-### Tier A — product-as-the-give
-1. **Signal play (hiring + technographic)** — *"I built a personalized **signal play** for {company}
-   off your hiring and tech-stack signals — accounts showing them progress ~**4.4x** faster. Worth
-   **15 minutes** for me to walk you through it?"*
-2. **Pipeline gap analysis** — *"Want to **grab 15 minutes**? I'll walk you through our **pipeline
-   model** and show exactly how many meetings {company} needs to hit target this quarter."*
-3. **Personalized drafts** — *"I had our AI SDR draft **3 personalized emails to your top 3
-   accounts**. Want to **hop on a quick call** and I'll walk you through them?"*
-4. **Run-rate + signal-set estimate** — *"**Worth 15 minutes**? I'll calculate {company}'s current
-   meeting **run rate**, map the **signal set** you're already generating, and walk you through how
-   many **additional meetings** the AI SDR would add on top."* (the step-2 default)
-5. **Signal-mapping session** — *"Want to **grab 15 minutes**? We'll map {company}'s **signal
-   sets**, find the **highest-yield sources**, and I'll show you exactly where the AI SDR increases
-   output."* (the step-3 default, paired with the Memgraph signal-activation proof)
+Describe the assessment by what the prospect **gets**, never how it works: "A free EBS Data
+Lifecycle Assessment: your data-growth profile, archive candidates by module, a quantified
+cost-reduction opportunity, your risk areas, and a phased roadmap. A real number for your
+environment, not a generic range."
 
-### Tier B — analysis / teardown gives
-6. **Outbound teardown** — *"**Worth 15 minutes?** I'll walk you through a **teardown of your current
-   outbound** — 3 things I'd change. Our best practices alone usually lift response rates 50–70%."*
-7. **Peer benchmark** — *"Want to **grab time** so I can walk you through how {company}'s reply rate
-   compares to other {seed/Series-A} startups?"* (replies/LinkedIn only — retired from email step 3)
-8. **Pilot playbook** — *"Before I close your file — **worth 15 minutes** to walk through a one-page
-   **playbook of 3 AI-SDR plays** for your {team/motion}?"* (the breakup-step meeting ask)
+## The library
+
+### Tier A — the reads (touch-1 gives)
+1. **POV send-over** — *"If that is a live issue, I have written a short POV on it. It covers how companies move that cold data off the running system while keeping it searchable for audit and tax. Want me to send it over?"* (the workhorse touch-1 ask)
+2. **Resonance check** — *"If that is on your radar, I have a short write-up on it. Glad to share it. Does that match what you are seeing?"* (lighter than a send-over ask; the A/B alternative)
+3. **White-paper give** — *"A two-minute read on what dormant ERP data costs and what companies do about it. Reply any time and I will send it."* (Track B framing; same asset, named as a white paper)
+
+### Tier B — conversion offers (touch 2 and later only)
+1. **Data Lifecycle Assessment** — *"The natural next step is a free Data Lifecycle Assessment. It puts a real number against your own system rather than a general pattern. Want me to set that up?"* (the touch-2/3 conversion give; link www.valueglobal.net/archiving-solutions)
+2. **Assessment demo** — *"See what your assessment would look like: https://vg-ebs-archiving-assessment-demo.netlify.app/index.html"* (soft CTA, follow-ups and replies only)
+3. **Sample report, supplier 360** — *"Search a supplier and see the whole picture: orders, receipts, invoices, payments, approvals and audit history in one place."* (NOT YET CLEARED by Value Global; do not ship in a sequence until confirmed)
 
 ### Anti-patterns — DO NOT USE
-- ✗ "Want me to send it over? Yours to keep, no call needed." (we deliver only on a meeting)
-- ✗ "Got 15 minutes for a quick call?" (a meeting ask with NO value hook — anchor it on a give)
-- ✗ "Want 25 in-market accounts / your de-anonymized visitors?" (undeliverable / fake)
+- ✗ A meeting ask in touch 1 (earlier drafts did this and got no replies)
+- ✗ An assessment ask in touch 1 (same failure; the read comes first)
+- ✗ Any booking or scheduling link (Calendly, Chili Piper, cal.com, HubSpot meetings) anywhere
+- ✗ A free-pilot offer, ever (a customer willing to pay for a short pilot is qualified; the assessment is free, the pilot is not)
+- ✗ Price or pricing shape in cold steps
+- ✗ Any production-access or data-safety reassurance (reactive answer only; volunteering it got zero replies)
+- ✗ An end-of-support deadline as the opening hook (triggers route conversations, they do not open them)
 
 ## Cadence placement (4-touch email)
-- **Step 1 (opener):** Tier-A give + meeting ask — signal play or pipeline gap.
-- **Step 2:** the **run-rate + signal-set estimate** give + meeting ask. (When a hiring signal is
-  provided, open email 2 on it: open-role count + 1-2 sales roles, tied to coverage while the new
-  reps ramp. When a sequencing play is flagged, add the no-disruption line: the AI SDR ships its
-  own email + LinkedIn infrastructure and capacity, so nothing about their tools or process
-  changes — 2–5x more meetings on top of the current run rate; with hiring present that shrinks to
-  one supporting line.)
-- **Step 3:** the Memgraph **signal-activation** proof + the **signal-mapping session** give +
-  meeting ask. (Name ONE detected intent/ABM tool when flagged; when only ad pixels are flagged,
-  reference their ad investment generically — never name pixels; otherwise tell the Memgraph
-  signal-set story on its own: reo.dev, 6sense, product telemetry surfacing more in-market
-  accounts than the team could prospect, activated by the AI SDR.)
-- **Step 4 (breakup):** *"Before I close your file, worth 15 minutes to walk through the playbook?"*
 
-## Iteration loop
-1. Generate a sequence with a chosen primary give (`SKILL.md` → generate).
-2. Generate **N CTA variants** for the same lead (`examples/cta-variants.md`).
-3. Ship; on the next `analyze_icp_cta.py`, watch which give+meeting framings earn replies and
-   promote winners.
+- **Step 1 (opener):** question opener + the pattern stated generally + the POV send-over or
+  resonance-check ask. Nothing else.
+- **Step 2:** the cost of doing nothing (the hardware treadmill, "archiving is SLA protection")
+  plus the assessment described by its five deliverables, with the archiving-solutions link.
+- **Step 3:** the 20-minute call ask to set the assessment up. No new argument, no new proof,
+  two windows named in prose.
+- **Step 4 (breakup):** concede timing, leave the read on the table ("or on someone else's
+  desk"), "reply any time and I will send it."
 
 ## Guardrails for any CTA
-- Must **ask for a meeting** AND **anchor it on a deliverable give**.
-- One ask per email. Keep the meeting ask low-friction (15 min, a quick call).
+
+- One ask per email; the ask escalates read → assessment → short call.
+- A positive reply hands off to a human: Value Global runs discovery. The AI SDR carries the
+  conversation to the booked call and no further.
+- The demo link and www.valueglobal.net/archiving-solutions are the only two links allowed in
+  copy. The domain is valueglobal.net, never valueglobal.com.

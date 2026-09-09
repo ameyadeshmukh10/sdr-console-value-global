@@ -15,9 +15,9 @@ const POLL_MS = 2500
 
 // Instruction-set variants to A/B test (must match the backend WRITE_RULES keys).
 const VARIANTS = [
-  { id: 'value-give', label: 'Value-give (baseline)', hint: 'Current: give + meeting ask each step, ~80-110 words' },
-  { id: 'earn', label: 'Earn-the-reply', hint: 'Shorter, question CTAs, meeting deferred to touch 3' },
-  { id: 'show', label: 'Show-the-product', hint: 'Earn + async "3 sample emails to your top accounts" offer' },
+  { id: 'value-give', label: 'POV send-over (baseline)', hint: 'Touch 1 asks "want me to send it over?"' },
+  { id: 'earn', label: 'Resonance check', hint: 'Touch 1 asks "does that match what you are seeing?"' },
+  { id: 'show', label: 'White-paper track', hint: 'Track B: the give is framed as the white paper' },
 ]
 
 export default function PipelinePage() {

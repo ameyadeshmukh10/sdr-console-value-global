@@ -1,23 +1,28 @@
-# CTA / Offer Variants for one lead (the "offers testing" substrate)
+# CTA / Offer Variants for one lead (the A/B substrate)
 
-Same lead as the gold sequence (Maya Chen, VP Revenue, Driftwave — Series-A, just raised $12M,
-hiring AEs). Below are **deliverable, value-first CTA variants for the Step-1 opener** to A/B test.
-Each gives value without requiring a meeting — and each is something we can actually send/show.
-Rotate one per segment and measure the value-first reply share on the next `analyze_icp_cta.py` run.
+Same lead as the gold sequence (Dan Kowalski, Director of Enterprise Applications, Meridian
+Foods, fictional). Value Global's own guidance: **A/B the call to action itself, not just the
+copy** — *send the POV* versus *does this resonate* versus the white-paper framing. Below are
+the touch-1 CTA variants to rotate, plus the follow-up-only offers. Every variant asks for
+permission to receive a read; none asks for a meeting or the assessment in touch 1.
 
-| # | CTA (verbatim) | Give type | Why it pays the buyer first |
+| # | CTA (verbatim) | Give type | Placement |
 |---|---|---|---|
-| V1 | "I had our SDR AI build a **personalized signal play** for Driftwave off your hiring and tech-stack signals — accounts showing them progress ~4.4x faster. Want me to send it over?" | signal play | A tailored play they keep |
-| V2 | "Do you know how many meetings Driftwave needs to hit pipeline target this quarter? I can **walk you through our pipeline model** and show exactly how to close the gap." | pipeline gap analysis | The meeting math for their number |
-| V3 | "I had our AI SDR write **3 personalized emails to your top 3 target accounts**. Want to see them?" | 3 drafts | Ready copy + a quality bar |
-| V4 | "Happy to send a **2-minute teardown of Driftwave's current outbound** — 3 things I'd change. Our best practices alone usually lift response rates 50–70%." | teardown | Free expert review |
-| V5 | "Want a **benchmark of Driftwave's reply rate vs other Series-A startups**?" | peer benchmark | A number they'll want to know |
-| V6 | "Can I send a **one-page playbook with 3 AI-SDR plays** scoped to a Series-A motion?" | pilot playbook | A concrete plan (great breakup give) |
+| V1 | "If that is a live issue, I have written a short POV on how companies move that cold data off the running system while keeping it searchable. Want me to send it over?" | POV send-over | touch 1 (the workhorse) |
+| V2 | "If that is on your radar, I have a short write-up on it. Glad to share it. Does that match what you are seeing?" | resonance check | touch 1 (lighter A/B arm) |
+| V3 | "I put the whole argument in a white paper: how ERP data splits into active, aging and dormant, why the cost compounds, and what a governed archive changes. Two-minute read. Want it?" | white paper (Track B) | touch 1 or touch 2 |
+| V4 | "See what your assessment would look like: https://vg-ebs-archiving-assessment-demo.netlify.app/index.html" | assessment demo | follow-ups and replies only |
+| V5 | "The natural next step is a free Data Lifecycle Assessment. It puts a real number against your own system rather than a general pattern. Want me to set that up?" | assessment | touch 2 and later only, never touch 1 |
+| V6 | Sample supplier-360 report | sample report | BLOCKED until Value Global clears the sample assets |
 
 **Anti-patterns (do NOT ship):**
-- ✗ "Want 25 in-market accounts showing buying signals? Yours to keep." (can't deliver cold)
-- ✗ "Want the list of companies that visited your site this week?" (we don't have their visitor data)
-- ✗ "Got 15 minutes for a quick demo?" (bare time-ask, gives nothing)
+- ✗ Any meeting ask in touch 1 (field-tested failure: earlier drafts got no replies)
+- ✗ Any assessment ask in touch 1 (same failure)
+- ✗ A booking or scheduling link anywhere
+- ✗ A free pilot, a price, or a production-access reassurance
+- ✗ Asserting the prospect's ERP tenure, database size, or spend
 
-**How to test:** ship V1–V3 to comparable segments, hold V4–V6 for follow-ups/breakups, then on the
-next pull check which gives earned replies (`icp_cta.jsonl`) and promote winners in `cta-offers.md`.
+**How to test:** rotate V1/V2/V3 across comparable segments (the write-rule variants
+`value-give` / `earn` / `show` map to them one-to-one), track positive-reply rate separately
+from reply rate, and promote the winner in `cta-offers.md`. Discovery calls booked is the goal
+metric.

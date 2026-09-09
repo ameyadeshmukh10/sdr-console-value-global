@@ -125,11 +125,12 @@ PERSONA_ENV = {
 # Per-instruction-variant Bison campaigns. Enrollment routes by variant FIRST and
 # only falls back to the persona campaign (then the default BISON_CAMPAIGN_ID), so
 # both sets of campaigns can be live at once — see enroll.py / sdr_batches.cmd_enroll.
-VARIANT_ORDER = ["value-give", "earn", "show"]
+VARIANT_ORDER = ["value-give", "earn", "show", "erp-trigger"]
 VARIANT_ENV = {
     "value-give": "BISON_CAMPAIGN_VALUE_GIVE",
     "earn": "BISON_CAMPAIGN_EARN",
     "show": "BISON_CAMPAIGN_SHOW",
+    "erp-trigger": "BISON_CAMPAIGN_ERP_TRIGGER",
 }
 
 # ----------------------------------------------------------------------------
@@ -335,12 +336,22 @@ def db_status():
         for r in conn.execute("SELECT persona, status, COUNT(*) n FROM contacts "
                               "WHERE persona IS NOT NULL GROUP BY persona, status"):
             persona_status.setdefault(r["persona"], {})[r["status"]] = r["n"]
+        # monthly volume counter (client guardrail: 1,500-3,000 contacts/month)
+        month_start = now_iso()[:7] + "-01T00:00:00Z"
+        try:
+            enrolled_month = conn.execute(
+                "SELECT COUNT(*) FROM contacts WHERE status='enrolled' "
+                "AND enrolled_at IS NOT NULL AND enrolled_at >= ?", (month_start,)).fetchone()[0]
+        except sqlite3.Error:
+            enrolled_month = None
     return {
         "total_contacts": total,
         "contacts_by_status": cstat,
         "batches_by_status": bstat,
         "by_persona": by_persona,
         "persona_status": persona_status,
+        "enrolled_this_month": enrolled_month,
+        "monthly_cap": int(os.environ.get("ENROLL_MONTHLY_CAP", "3000") or 3000),
     }
 
 

@@ -59,115 +59,86 @@ PERSONA_FRAMING = {
     "it-leadership": _VG_FRAMING,
 }
 
-# Shared research block — all variants research the same way; only the writing (Step 3) differs.
+# Shared research block. For this offer the anchor is the ROLE + the general pattern, never
+# congrats-news: hunting for funding rounds or announcements is the wrong motion for a
+# 20-year-old ERP conversation (the client's own message set retired it).
 RESEARCH_BLOCK = """\
 # Today's date
-Today is {today}. The current year is {year}. Judge recency strictly against this date.
+Today is {today}.
 
 # Step 0 — the email domain is ground truth for WHO the company is
 The contact block gives the company name from our CRM and the contact's email domain. CRM
 names go stale (acquisitions, rebrands, mergers, junk values), but the domain is where the
-email actually lands — trust it. If the stated name does not match the company operating that
-domain today, research and write for the DOMAIN's company, using its current name (mention the
-legacy brand only where it genuinely helps, e.g. "VictorOps, now Splunk On-Call"). Exception:
-a personal/free email domain (gmail.com and the like) says nothing about the employer — keep
-the stated company then.
+email actually lands — trust it. You may use AT MOST ONE web search, and ONLY to verify which
+company operates the domain when the stated name looks stale or wrong; write for the domain's
+company under its current name. A personal/free email domain (gmail.com and the like) says
+nothing about the employer — keep the stated company then.
 
-# Step 1 — find a RECENT signal (be efficient, do not waste searches)
-Search the web for ONE recent signal about the contact's company, in this PRIORITY ORDER:
-1. A funding round the company RAISED in {year} (the more recent the better, within the last month
-   or two is ideal).
-2. A key LEADERSHIP HIRE (CRO, CEO, VP / Head / Director of Sales or GTM) announced in {year}.
-3. A PRODUCT LAUNCH, PARTNERSHIP, or NEW MARKET ENTRY in {year}.
-
-RECENCY IS MANDATORY. A signal only qualifies if it happened in {year}, and the closer to today the
-better. BEFORE you use any item, verify its date. If the most recent thing you can find is from
-{prev_year} or earlier (e.g. 2024, 2025), it does NOT qualify: ignore it and do NOT present old news
-as recent. Aim your queries at the current year (include "{year}" and recent-time terms).
-
-Use AT MOST 3 web searches. If you do not find a qualifying {year} signal, STOP searching and use the
-fallback below, do not keep burning searches.
-
-# Step 2 (fallback) — when there is NO recent {year} signal
-Do NOT invent or imply recent news, and do NOT use a generic pain hypothesis. Instead research the
-company's PRODUCT / OFFERING, their ICP (who they sell to), and their GO-TO-MARKET motion, and
-personalize the whole sequence around how our AI SDR fits THAT specific business. The opener must
-reference something concrete and true about what they build or who they sell to (not invented news).
+# Step 1 — the anchor (no news hunting)
+Do NOT search for funding rounds, executive hires, launches, or any congrats-news, and never
+open on one. The anchor for every touch is:
+1. The person's ROLE (verifiable from their title) — the question is put to that role.
+2. The detected ERP platform, when the contact block provides one.
+3. The general pattern about long-running ERP systems (the 10/20/70 story in the knowledge).
 
 # The `signal` field must be auditable
-- If you found a recent signal: set `signal` to it AND include its month/date, e.g.
-  "Raised a $20M Series B in May {year}".
-- If you used the fallback: prefix with "no recent signal - " and describe the anchor, e.g.
-  "no recent signal - anchored on Acme's PLG motion selling to mid-market RevOps teams".
+Set `signal` to the anchor you used, e.g. "role anchor - Director of Enterprise Applications
+on detected Oracle EBS" or "role anchor - IT leadership, no platform detected".
 """
 
-# ---- Variant write rules (Step 3). Choose one per run to A/B test. -----------------------------
+# ---- Variant write rules (Step 3). Value Global's own guidance: A/B the CTA itself -------------
+# ("send the POV" vs "does that match what you are seeing" vs the white-paper framing), same
+# 4-touch structure in all three. Shared rules live in the knowledge base (icp-email.md).
+_VG_SHARED_RULES = """\
+Shared rules (every variant): 35-110 words per email (the approved set runs 45-105); short
+paragraphs separated by a blank line; ONE idea and ONE ask per email; subject 1 is
+"What's it costing to keep data nobody touches?" and subjects 2-4 are "RE: " + subject 1,
+verbatim; open with a question, never a claim; state the 10/20/70 pattern about long-running
+EBS systems in general, NEVER about the recipient's environment; never open with "Congrats" or
+assert their ERP tenure; no meeting or assessment ask in touch 1; touch 2 carries the free Data
+Lifecycle Assessment (its five deliverables + www.valueglobal.net/archiving-solutions); touch 3
+is the 20-minute call ask with two windows named in prose, never a booking link; touch 4 is a
+breakup that concedes timing and leaves the read on the table; no em or en dashes; NO sign-off
+or trailing name; no hype; no pricing; no production-access reassurance; at most two
+credibility stats per email; the licensing rule from the knowledge applies.
+"""
+
 WRITE_RULES = {
-    # The original value-anchored give + meeting-ask sequence (the current baseline).
+    # VG baseline: the POV send-over ask ("want me to send it over?").
     "value-give": """\
-# Step 3 — write the sequence
-Write a 4-touch cold EMAIL sequence plus 3 LinkedIn touches, following every rule in the knowledge
-above: 70-110 words per email (aim 80-95); three short paragraphs separated by a blank line; no em or
-en dashes; NO sign-off or trailing name; step 1 opens on the signal (or the company-specific anchor
-in the fallback case); each CTA leads with a deliverable give AND asks for a meeting; at least one
-concrete metric across the sequence; step 4 is a breakup; never put pricing in a cold email.
-""",
+# Step 3 — write the sequence (POV send-over)
+Write a 4-touch cold EMAIL sequence plus 3 LinkedIn touches per the knowledge above.
+Touch 1's ask is the POV send-over, modeled on approved Message 1: "If that is a live issue,
+I have written a short POV on it... Want me to send it over?"
 
-    # "Earn the reply": shorter, relevance-first, question CTAs, meeting deferred. The email itself
-    # is the proof our AI writes like a sharp human.
+""" + _VG_SHARED_RULES,
+
+    # Resonance check: the lighter A/B arm ("does that match what you are seeing?").
     "earn": """\
-# Step 3 — write the sequence ("earn the reply")
-You are writing to a sharp, busy GTM leader who gets dozens of AI-generated cold emails a week. Your
-job is to NOT sound like those: we sell an AI SDR, so this email must prove, by being visibly better,
-that our AI writes like a thoughtful human peer. The goal of each early email is a REPLY, not a booked
-meeting.
+# Step 3 — write the sequence (resonance check)
+Write a 4-touch cold EMAIL sequence plus 3 LinkedIn touches per the knowledge above.
+Touch 1's ask is the resonance check, modeled on approved Message 2: "If that is on your
+radar, I have a short write-up on it. Glad to share it. Does that match what you are seeing?"
+The give is still the read; the ask is agreement with the pattern, which is even lighter than
+a send-over.
 
-- 45-75 words per email. One or two short paragraphs. ONE idea per email.
-- Touch 1 opens on the signal (or company anchor), then makes ONE specific, true observation about
-  THEIR situation (their motion, stage, or the tension the signal implies), and ends with a SINGLE
-  soft, open question. No meeting ask, no "give", no product pitch in touch 1.
-- Touch 2: one new specific angle (if a hiring-signal line is provided in the contact block, that IS
-  the angle for email 2: open on it). At most ONE proof point in the WHOLE sequence, told as a one-line
-  human story (never a stack of numbers). End on a soft question or a light, low-friction offer. If a
-  sequencing play is provided in the contact block, add one plain reassurance line (own email and
-  LinkedIn infrastructure, nothing about their tools or process changes) and let the light offer be to
-  size their current run rate and what the AI SDR would add on top.
-- Touch 3: now you may ask for a short conversation, framed as a quick look at their signal sources
-  and which high-yield ones are going unworked. If the sequence's ONE proof point lands here, tell it
-  as the Memgraph signal-activation story in one human line (their intent tools and product telemetry
-  were surfacing more in-market accounts than the team could prospect; pointing the AI SDR at the full
-  signal set drove $2.7M in 90 days), tied to THEIR signals when a play above flags them. Keep the ask
-  light (a quick chat / short call), not "worth 15 minutes to walk you through it".
-- Touch 4: a genuine one-line breakup. No guilt, leave the door open.
-- No em or en dashes. NO sign-off or trailing name. No hype words (revolutionary, game-changing,
-  cutting-edge, supercharge, unlock, transform). Do not cram metrics. Never put pricing in a cold
-  email. Vary how each email opens; do not start them all the same way.
-""",
+""" + _VG_SHARED_RULES,
 
-    # "Show the product": earn-the-reply PLUS a concrete async give that IS a demo of the product.
+    # White-paper track (Track B): the give is framed as a white paper; Track B's follow-up
+    # and breakup shapes.
     "show": """\
-# Step 3 — write the sequence ("show the product")
-Same as the "earn the reply" style, with ONE addition: this email is a live demo of the product. In
-TOUCH 2, make a concrete, low-friction, ASYNC offer that proves the product without a meeting: offer
-to send a small real sample our AI would produce for THEM, e.g. "I had our AI draft 3 opening lines
-(or 3 short emails) to {company}'s top 3 accounts, want me to send them over? No call." Delivered by
-email, no meeting required. If a hiring-signal line is provided in the contact block, open email 2 on
-it before making the sample offer.
+# Step 3 — write the sequence (white-paper track)
+Write a 4-touch cold EMAIL sequence plus 3 LinkedIn touches per the knowledge above, on the
+approved Track B shape. Touch 1's give is "the white paper" (same asset, named differently):
+a two-minute read on what dormant ERP data costs and what companies do about it. Touch 2
+describes what the white paper covers (how ERP data splits into active, aging and dormant;
+why the cost of the dormant part compounds; why most teams leave it alone; what a governed
+archive changes; the four answers companies reach for) and then offers the assessment. Touch 4
+is Track B's breakup: "I will stop here rather than keep filling your inbox... if archiving
+old ERP data lands on your desk later this year, or on someone else's... Reply any time and I
+will send it."
 
-- 45-75 words per email. One or two short paragraphs. ONE idea per email.
-- Touch 1: open on the signal (or anchor) + ONE specific observation about their situation + a SINGLE
-  soft, open question. No meeting ask in touch 1.
-- Touch 2 carries the async sample offer above. At most ONE proof point in the whole sequence, as a
-  one-line human story. A sequencing play from the contact block joins touch 2 only when there is NO
-  hiring signal (one reassurance line: own sending infrastructure, their tools and process untouched).
-- Touch 3: a soft meeting ask framed as signal activation: the variant's single proof point as one
-  Memgraph line (their intent tools and product telemetry surfaced more in-market accounts than the
-  team could prospect; the AI SDR was pointed at the full signal set), plus an offer to take a quick
-  look at THEIR signal sources together.
-- Touch 4: a genuine one-line breakup.
-- No em or en dashes. NO sign-off or trailing name. No hype words. Do not cram metrics. Never put
-  pricing in a cold email. Vary how each email opens.
-""",
+""" + _VG_SHARED_RULES,
 }
 DEFAULT_VARIANT = "value-give"
 
@@ -245,25 +216,28 @@ ERP_PLAYS = {
                    "the liability.",
         "solution": "ERP Data Retirement compresses the Oracle footprint before the audit closes: "
                     "retiring inactive data and decommissioning dormant modules and environments so "
-                    "there is less to license, less to defend, and a smaller support renewal. They "
-                    "walk into the audit with a lean, justifiable footprint instead of a sprawling "
-                    "one.",
+                    "there is less to defend and a smaller support renewal (decommissioned "
+                    "environments genuinely come off the license bill; archiving alone does not cut "
+                    "the license on a live one). They walk into the audit with a lean, justifiable "
+                    "footprint instead of a sprawling one.",
         "opener": "the audit-exposure signal found (the M&A event, the SAM/procurement hire, or the "
                   "Oracle-spend commentary), tied to what still counts toward an audit",
     },
     "ebs_oci": {
         "label": "EBS on OCI",
-        "problem": "They lifted EBS onto OCI, but they are still paying full Oracle license and "
-                   "support, and full cloud compute and storage, to host 20 years of history, most of "
-                   "which is dormant and never queried. They moved the problem to the cloud instead "
-                   "of shrinking it, so the cloud bill carries the full weight of data that only "
-                   "exists for compliance.",
-        "solution": "ERP Data Retirement retires the dormant history off the live OCI instance into a "
-                    "low-cost compliant archive, cutting the licensed, supported, and hosted "
-                    "footprint by up to ~80%, so they pay cloud rates only for the data they actually "
-                    "use, while retained history stays accessible for audit and legal hold.",
-        "opener": "their EBS-on-OCI move (the lift-and-shift found), tied to still paying full "
-                  "freight on dormant history",
+        "problem": "They lifted EBS onto OCI, so the cloud bill now carries the full weight of 20 "
+                   "years of history, most of which is dormant and never queried: compute, storage, "
+                   "and backup scale with database size, and an environment kept alive mostly for "
+                   "lookups still runs at full freight. They moved the problem to the cloud instead "
+                   "of shrinking it.",
+        "solution": "ERP Data Retirement retires the dormant history off the live OCI instance into "
+                    "a low-cost governed archive, so they pay cloud rates only for the data they "
+                    "actually use while retained history stays accessible for audit and legal hold. "
+                    "Where an EBS environment exists mostly for compliance reads, full retirement "
+                    "takes that environment's Oracle license and support to zero. Never attach a "
+                    "percentage figure to any of this in cold copy.",
+        "opener": "their EBS-on-OCI move (the lift-and-shift found), tied to hosting dormant "
+                  "history at full freight",
     },
     "ebs_performance": {
         "label": "EBS performance",
@@ -278,20 +252,23 @@ ERP_PLAYS = {
                     "buying more hardware or re-architecting the system.",
         "opener": "running EBS at their scale and data age (plus any tuning/DBA proxy found), tied to "
                   "month-end close and batch performance; never claim to know their close is slow, "
-                  "pose it as the question",
+                  "pose it as the question; never claim licensing savings here, the cost story for a "
+                  "system they keep is hardware and infrastructure",
     },
 }
 
 ERP_SYSTEM = """\
-You are an expert B2B SDR copywriter for Value Global's ERP Data Retirement offering.
+You are an expert B2B SDR copywriter for Value Global's ERP Data Retirement service, delivered
+on the ROAD platform by InfoCorvus.
 
-# What we sell (ground truth — never invent beyond this)
+# What we sell (ground truth; never invent beyond this)
 Value Global's ERP Data Retirement extracts, archives, and retires legacy ERP data (Oracle
-E-Business Suite and similar estates): aged and dormant records move out of the live system into a
-low-cost, compliant, independently queryable archive that satisfies audit, tax, and legal-retention
-obligations. That lets companies shrink licensed Oracle footprints, retire old systems entirely,
-separate data cleanly after M&A, and recover month-end performance, without losing access to
-history.
+E-Business Suite is the sweet spot; PeopleSoft and JD Edwards secondary): aged and dormant
+records move out of the live system into a low-cost, governed, independently queryable archive
+(license-free PostgreSQL) that satisfies audit, tax, and legal-retention obligations. That lets
+companies retire old systems entirely (taking that environment's Oracle license and support to
+zero), separate data cleanly after M&A, and recover month-end performance, without losing
+access to history. ROAD cannot archive out of Oracle Fusion or any cloud ERP; never imply it can.
 
 # Your task
 You are GIVEN a VERIFIED buying trigger researched for this account (with its source and date),
@@ -299,7 +276,9 @@ plus the sales play for that trigger. Do NOT search the web. Write a 4-touch col
 plus 3 LinkedIn touches anchored on that trigger.
 
 # Write rules
-- 45-90 words per email. One or two short paragraphs separated by a blank line. ONE idea per email.
+- 35-110 words per email. One or two short paragraphs separated by a blank line. ONE idea and
+  ONE ask per email.
+- Subject 1 may be trigger-specific; subjects 2-4 are "RE: " + subject 1, verbatim.
 - Touch 1 opens on the trigger event (name what actually happened, with its month/date when given),
   makes the play's problem concrete for THEIR situation in one or two lines, and ends with ONE
   soft, open question. No meeting ask and no product pitch in touch 1.
@@ -307,16 +286,27 @@ plus 3 LinkedIn touches anchored on that trigger.
   introduce in plain words what ERP Data Retirement does about it (the play's solution). End on a
   soft question or a light offer to share how similar companies handled it.
 - Touch 3: a short, specific meeting ask: 20 minutes to walk through what the archive / separation /
-  footprint compression would look like for their estate. Concrete, no hype.
+  footprint compression would look like for their environment. Two windows named in prose, never a
+  booking link.
 - Touch 4: a genuine one-line breakup. No guilt, leave the door open.
-- The trigger verdict and the play are your ONLY facts about this company (plus a tech-stack line
-  when provided). Never invent numbers, dates, names, or internal details. The ~80%
-  footprint-reduction figure may be used ONLY when the play itself states it.
+- The trigger verdict and the play are your ONLY facts about this company (plus a detected-ERP
+  line when provided). Never invent numbers, dates, names, or internal details.
+- When a detected on-prem ERP platform is provided, name it once, naturally: an ERP that has run
+  for 15 to 20 years accumulates very high data volumes, has archiving that history come up?
+  Pattern plus question, never a claim about their environment; never mention scanning.
+- The licensing rule: Oracle licensing is metered on cores and users, not data volume. Never
+  claim archiving cuts the license for a system they keep running; license and support go to
+  zero only when a retired environment is decommissioned. No percentage figures on licensing
+  or footprint reduction in cold copy.
+- Never assert facts about the recipient's environment; state patterns generally. Never open
+  with "Congrats". At most two credibility stats per email. The only links allowed are
+  www.valueglobal.net/archiving-solutions and the assessment demo page.
 - No em or en dashes. NO sign-off or trailing name. No hype words (revolutionary, game-changing,
-  cutting-edge, seamless, supercharge, unlock, transform). Never put pricing in a cold email. Vary
-  how each email opens; do not start them all the same way.
+  cutting-edge, seamless, robust, supercharge, unlock, transform). Never write "purge",
+  "estate", "AI-powered", or any production-access reassurance. Never put pricing in a cold
+  email. Vary how each email opens; do not start them all the same way.
 - LinkedIn: li_connect is a <=280-char connection note referencing the trigger (no pitch);
-  li_msg1/li_msg2 are short, value-first follow-ups.
+  li_msg1/li_msg2 are short, value-first follow-ups offering the read.
 - Set the `signal` JSON field to the trigger finding with its month/date.
 
 """ + OUTPUT_SCHEMA
@@ -342,9 +332,9 @@ def build_erp_user(contact, segment, verdict, tech_line=None, prior_issues=None)
         f"- What ERP Data Retirement does about it: {play['solution']}\n"
         f"- Email 1 opens on: {play['opener']}\n"
     )
-    if tech_line:
-        base += (f"\nCompany tech stack (deterministic scan; reliable): {tech_line}\n"
-                 "Background context only — never present it as news or say we scanned them.\n")
+    mention = erp_mention_block(tech_line)
+    if mention:
+        base += "\n" + mention
     base += "\nUse the contact's first name in the copy. Write the sequence. Return only the JSON object."
     if prior_issues:
         base += ("\n\nYour previous attempt FAILED these checks:\n- "
@@ -367,7 +357,7 @@ def lint_erp(email):
     """Structural checks for the ERP trigger sequence: length band, no dashes /
     sign-off / pricing / hype, soft question in touch 1, breakup in touch 4.
     No metric requirement — the trigger verdict is the anchor, not proof stats."""
-    return _lint_short(email, lo=28, hi=110)
+    return _lint_short(email, lo=35, hi=110)
 
 
 def _segment_verdict(domain, segment):
@@ -440,33 +430,31 @@ def generate_contact_erp(contact, segment, verdict, client, write=True, tech_lin
             "cache_read": cache_read, "cache_write": cache_write}
 
 
-# Write-only preamble: the signal is provided (from the cache), so no web search. The chosen variant's
-# write rules (above) are appended after this.
+# Write-only preamble: any cached company anchor is provided, so no web search.
 WRITE_PREAMBLE = """\
 # Your task
-You are GIVEN the company's current signal in the contact block below. Do NOT search the web. Write the
-sequence using ONLY the provided signal. If the signal begins with "no recent signal -", treat the text
-after it as the company's product / ICP / GTM anchor and personalize around that (do not invent news).
+Do NOT search the web. Write the sequence from the contact block below: the role anchor, the
+detected ERP platform when provided, and any provided company anchor line. Never invent news.
 """
 
-# Research-only task (UI force-refresh): just find/refresh the signal, return only the signal JSON.
+# Research-only task (UI force-refresh): verify the company + produce a one-line anchor.
+# No news hunting — the anchor motion for this offer is role + platform + pattern.
 RESEARCH_ONLY_TASK = """\
-Today is {today}. The current year is {year}. Judge recency strictly against this date.
+Today is {today}.
 
 The company name we have may be stale — the DOMAIN is ground truth. If the given name does not
 match the company operating the domain today (acquisition, rebrand, merger, junk CRM data),
 research the domain's company instead and use ITS current name. (Personal/free email domains
-are the exception — keep the given name.)
+are the exception — keep the given name.) Use at most 2 web searches, only to verify the
+company and what it does.
 
-Find ONE recent signal for the company, in priority order: (1) a {year} funding round the company raised,
-(2) a {year} key leadership hire, (3) a {year} product launch / partnership / new market entry. A signal
-qualifies ONLY if it happened in {year}; verify the date; ignore anything from {prev_year} or earlier. Use
-at most 3 web searches. If none qualifies, set has_recent_signal=false and put a one-line product/ICP/GTM
-anchor in `signal`, prefixed with "no recent signal - ".
+Do NOT hunt for funding rounds, hires, or announcements. Set `signal` to a one-line anchor
+describing the company (what it runs on / sells / operates) usable as background for an
+ERP-archiving conversation, prefixed with "company anchor - ". Set has_recent_signal=false.
 
 Return ONLY this JSON, no prose:
 {{"company": "<the company name you verified for the domain>",
-  "signal": "<signal with its month/date, or 'no recent signal - <anchor>'>", "has_recent_signal": true|false}}
+  "signal": "company anchor - <one line>", "has_recent_signal": false}}
 """
 
 
@@ -487,9 +475,38 @@ def build_system(knowledge, variant=DEFAULT_VARIANT, mode="research"):
     else:
         body = RESEARCH_BLOCK.format(**_today()) + "\n\n" + rules
     return (
-        "You are an expert B2B SDR copywriter for EverWorker's SDR AI Worker. Ground every claim in "
-        "the knowledge base below; never invent product claims, numbers, or proof not in it.\n\n"
+        "You are an expert B2B SDR copywriter for Value Global's ERP Data Retirement service "
+        "(delivered on the ROAD platform by InfoCorvus). Ground every claim in the knowledge base "
+        "below; never invent product claims, numbers, or proof not in it.\n\n"
         + knowledge + "\n\n---\n\n" + body + "\n\n" + OUTPUT_SCHEMA
+    )
+
+
+# On-prem ERP names as they appear in the tech_signals display line. Fusion is
+# deliberately absent: Fusion-only accounts are suppressed upstream, and a
+# co-detected Fusion must never be named in copy (ROAD cannot archive from it).
+_ERP_MENTION_NAMES = ("e-business suite", "peoplesoft", "jd edwards")
+
+
+def erp_mention_block(tech_line):
+    """The prompt block for a detected ON-PREM ERP (client rule, 2026-09
+    kick-off: when EBS / PeopleSoft / JD Edwards is detected, the email SHOULD
+    mention it). Returns '' when the line names no on-prem suite. This block
+    must survive any future knowledge-base rework — it implements a confirmed
+    client requirement, not template styling."""
+    if not tech_line:
+        return ""
+    low = tech_line.lower()
+    if not any(n in low for n in _ERP_MENTION_NAMES):
+        return ""
+    return (
+        f"Detected ERP platform (deterministic portal/DNS scan; reliable): {tech_line}\n"
+        "NAME this platform once, naturally, in the copy (touch 1 is the natural place). The "
+        "angle, per the client: an ERP that has run for 15 to 20 years accumulates very high "
+        "data volumes, so has archiving that history come up? State it as a general pattern "
+        "about long-running systems plus a question, NEVER as a fact about their environment, "
+        "and never mention scanning, detection, or how we know. If the line also names Oracle "
+        "Fusion, do not mention Fusion at all.\n\n"
     )
 
 
@@ -508,67 +525,25 @@ def build_user(contact, cached_signal=None, prior_issues=None, tech_signals=None
         f"- linkedin: {contact.get('linkedin_url','')}\n\n"
         f"Persona framing: {framing}\n\n"
     )
-    if tech_signals:
-        base += (
-            f"Company tech stack (deterministic scan of their website/DNS; reliable): {tech_signals}\n"
-            "Background only unless a play below says otherwise: reference a specific tool ONLY when "
-            "it sharpens one line's relevance (e.g. their CRM). Never list the stack, never mention "
-            "scanning, never present it as news. Never mention chat, scheduling, or website-chat "
-            "tools (e.g. Qualified, Drift, Intercom, Chili Piper, Calendly) at all.\n\n"
-        )
-        pb = tech_playbook or {}
-        seq, intent, ads = pb.get("sequencing") or [], pb.get("intent_abm") or [], pb.get("ads") or []
-        if seq:
-            base += (
-                f"Sequencing play for EMAIL 2 (they run {seq[0]}): acknowledge in one line that the "
-                "team already runs sequences (you may name the tool once, naturally) and make the "
-                "no-disruption point: our AI SDR ships its own built-in email and LinkedIn "
-                "deliverability infrastructure and sending capacity, so nothing about their current "
-                "tools or process changes. Reps stay on follow-up and deal progression while it "
-                "generates meetings and interested leads on autopilot, adding 2-5x more meetings on "
-                "top of the current run rate. Close email 2 on the run-rate CTA: 15 minutes to "
-                "calculate their current run rate, map their signal set, and estimate how many "
-                "additional meetings the AI SDR would add. If a hiring signal is provided below, the "
-                "hiring signal stays email 2's opener and this play shrinks to one supporting line "
-                "before that CTA.\n\n"
-            )
-        if intent:
-            base += (
-                f"Signal-activation play for EMAIL 3 (they run {intent[0]}): name that one tool "
-                "naturally (never as news, never implying we scanned them). In-market and intent "
-                "signals are already flowing into their stack and most go unworked; our AI SDR "
-                "activates automatically against exactly those signals, so they get worked the moment "
-                "they appear. Tie this into email 3's Memgraph signal-activation proof and close on "
-                "the signal-mapping CTA (both in the knowledge above).\n\n"
-            )
-        elif ads:
-            base += (
-                "Signal-activation play for EMAIL 3 (their site runs ad pixels): they are investing "
-                "in ads, so their spend is already generating demand and inbound signals. Reference "
-                "that ad investment in general terms only, never name pixel vendors and never imply "
-                "we looked at their site: our AI SDR acts on the signals their ads already produce, "
-                "turning existing investment into more meetings and pipeline. Tie this into email 3's "
-                "Memgraph signal-activation proof and close on the signal-mapping CTA (both in the "
-                "knowledge above).\n\n"
-            )
+    # tech_playbook is accepted for call compatibility but unused: the GTM-tool
+    # plays it drove can never fire under the ERP-only detection selection.
+    mention = erp_mention_block(tech_signals)
+    base += mention or (
+        "No on-prem ERP was detected for this account. Anchor on the role and the general "
+        "pattern about long-running ERP systems; say nothing about their specific stack.\n\n"
+    )
     if hiring_signals:
         base += (
-            f"Company hiring signal (live job-postings scan; reliable): {hiring_signals}\n"
-            "Use it in EMAIL 2 ONLY: open email 2 on the hiring signal (open-role count plus one or two "
-            "sales roles, e.g. 'hiring AEs and an SDR') and tie it to covering more pipeline while the "
-            "new reps ramp. Never use it in email 1. If email 1's signal already covers their hiring, "
-            "skip this angle entirely, do not double-hit. Never mention the data source, never list all "
-            "the titles, do not claim the postings are new, and do not reference hiring anywhere else "
-            "in the sequence. If a sequencing play is provided above, hiring still opens email 2 and "
-            "the sequencing point shrinks to one supporting line.\n\n"
+            f"Company hiring line (live job-postings scan; background only): {hiring_signals}\n"
+            "Do NOT open on it and do not congratulate. You may use it only as quiet context for "
+            "the role anchor. Never mention the data source.\n\n"
         )
     if cached_signal:
-        base += (f"Company signal (use this, do NOT search the web): {cached_signal}\n\n"
+        base += (f"Company anchor (verified context; do NOT search the web): {cached_signal}\n\n"
                  f"Use the contact's first name in the copy. Write the sequence. Return only the JSON object.")
     else:
-        base += (f"Use the contact's first name in the copy. Research "
-                 f"{contact.get('company','the company')} now and write the sequence. "
-                 f"Return only the JSON object.")
+        base += (f"Use the contact's first name in the copy. Verify the domain's company if needed "
+                 f"and write the sequence. Return only the JSON object.")
     if prior_issues:
         base += ("\n\nYour previous attempt FAILED these checks:\n- "
                  + "\n- ".join(prior_issues)
@@ -586,73 +561,72 @@ def lint_email(email):
         steps.append({"n": i, "subject": subj, "body": body})
     if issues:
         return issues
-    full = " ".join(s["body"] for s in steps)
-    if not L.METRIC.search(full):
-        issues.append("no concrete metric in the sequence")
+    issues += L.sequence_issues(steps)
     for idx, step in enumerate(steps):
         _, step_issues = L.lint_email(step, is_last=(idx == len(steps) - 1), is_first=(idx == 0))
         issues += [f"step{step['n']}: {it}" for it in step_issues]
     return issues
 
 
-# --- relaxed linters for the new test variants (shorter, question-led, no forced give/meeting/metric) ---
-_HYPE = re.compile(r"\b(revolutioniz\w*|revolutionary|game[- ]?chang\w*|cutting[- ]?edge|"
-                   r"supercharg\w*|unlock\w*|transformati\w*|best[- ]in[- ]class|world[- ]class|"
-                   r"seamless\w*|paradigm|synerg\w*)\b", re.I)
+# --- the trigger-path linter: same VG claim discipline, looser structure ------
+_HYPE = L.HYPE  # single source of truth for the hype list (lint_sequence)
 
 
 def _wc(body):
     return len(re.findall(r"[A-Za-z0-9']+", body or ""))
 
 
-def _lint_short(email, lo=28, hi=100, require_give=None):
-    """Shared rules for the earn/show variants: short, no dashes/sign-off/pricing/hype,
-    a soft question in touch 1, a genuine breakup in touch 4. Word-count band is
-    intentionally wide — it's a style nudge, not worth an expensive re-gen."""
+def _lint_short(email, lo=35, hi=110):
+    """VG rules for the trigger-anchored sequence: word band, no dashes /
+    sign-off / pricing / hype, the full ban + claim-discipline list, a soft
+    question in touch 1, a breakup in touch 4, RE: subject chain. Structure is
+    looser than the default path (the trigger opener replaces the canonical
+    question opener), but the claim discipline is identical."""
     steps = []
     for i in range(1, 5):
         subj, body = email.get(f"subject{i}", ""), email.get(f"body{i}", "")
         if not subj or not body:
             return [f"missing subject{i}/body{i}"]
         steps.append({"n": i, "subject": subj, "body": body})
-    issues = []
+    issues = list(L.sequence_issues(steps))
     for s in steps:
         b = s["body"]
         wc = _wc(b)
-        if not (lo <= wc <= hi):
+        if not (lo - 5 <= wc <= hi + 10):
             issues.append(f"step{s['n']}: word count {wc} (need {lo}-{hi})")
         if L.DASH.search(b):
-            issues.append(f"step{s['n']}: em/en dash present (use commas or periods)")
+            issues.append(f"step{s['n']}: em/en dash present (use commas, colons or a full stop)")
         lines = [ln.strip() for ln in b.splitlines() if ln.strip()]
         if lines and L.SIGNOFF_LINE.match(lines[-1]):
-            issues.append(f"step{s['n']}: trailing sign-off/name (end on the line, no sign-off)")
-        if L.PRICING.search(b):
-            issues.append(f"step{s['n']}: pricing/plan language in a cold step")
-        if _HYPE.search(b):
-            issues.append(f"step{s['n']}: hype word (write like a sharp human, no buzzwords)")
+            issues.append(f"step{s['n']}: trailing sign-off/name (end on the ask, no sign-off)")
+        for rx, msg in ((L.PRICING, "pricing language in a cold step"),
+                        (L.BANNED, "banned term/phrase (see offer.md ban list)"),
+                        (_HYPE, "hype word"),
+                        (L.ANALYST_CLAIM, "analyst citation"),
+                        (L.ORACLE_RELATIONSHIP, "Oracle co-sell/partner claim"),
+                        (L.RECIPIENT_ASSERTION, "asserts a fact about the recipient"),
+                        (L.LICENSING_NUMBER, "licensing/footprint percentage in cold copy"),
+                        (L.BOOKING, "booking/scheduling link or tool"),
+                        (L.BAD_DOMAIN, "valueglobal.com (the domain is valueglobal.net)")):
+            if rx.search(b):
+                issues.append(f"step{s['n']}: {msg}")
+        for url in L.URL_CANDIDATE.findall(b):
+            if not L.URL_ALLOWED.match(url.rstrip(".,)")):
+                issues.append(f"step{s['n']}: link not on the whitelist: {url[:60]}")
+        if len(L.STATS.findall(b)) > 2:
+            issues.append(f"step{s['n']}: more than two credibility stats")
+        if L.INFOCORVUS_FIGURES.search(b) and "infocorvus" not in b.lower():
+            issues.append(f"step{s['n']}: InfoCorvus figure without the vendor attribution")
     if "?" not in steps[0]["body"]:
-        issues.append("step1: no soft question (touch 1 should end on one open question)")
+        issues.append("step1: no soft question (touch 1 ends on one open question)")
     if not L.BREAKUP.search(steps[-1]["body"]):
         issues.append("step4: final step is not a breakup")
-    if require_give and not require_give.search(" ".join(s["body"] for s in steps)):
-        issues.append("missing the async sample offer (touch 2 should offer to send a real sample, no call)")
     return issues
 
 
-# a lenient detector for the "show" variant's async sample offer
-_SHOW_GIVE = re.compile(r"\bsample\b|drafted?\s+(3|three)|\b(3|three)\s+(sample|opening|short|"
-                        r"personalized|tailored)\b|want me to send|send (you |them |over )|no call", re.I)
-
-
-def lint_earn(email):
-    return _lint_short(email)
-
-
-def lint_show(email):
-    return _lint_short(email, require_give=_SHOW_GIVE)
-
-
-LINTERS = {"value-give": lint_email, "earn": lint_earn, "show": lint_show,
+# All three A/B variants share the canonical VG 4-touch shape and linter; the
+# trigger path gets the looser-structure variant with identical claim rules.
+LINTERS = {"value-give": lint_email, "earn": lint_email, "show": lint_email,
            ERP_VARIANT: lint_erp}
 
 

@@ -310,8 +310,14 @@ def set_batch_status(conn, batch_id, status):
 
 
 def set_contact_status(conn, contact_id, status, error=None):
-    conn.execute("UPDATE contacts SET status=?, error=?, updated_at=? WHERE contact_id=?",
-                 (status, error, now(), contact_id))
+    if status == "enrolled":
+        # stamped once at Bison enrollment; drives the monthly volume counter
+        conn.execute("UPDATE contacts SET status=?, error=?, updated_at=?, "
+                     "enrolled_at=COALESCE(enrolled_at, ?) WHERE contact_id=?",
+                     (status, error, now(), now(), contact_id))
+    else:
+        conn.execute("UPDATE contacts SET status=?, error=?, updated_at=? WHERE contact_id=?",
+                     (status, error, now(), contact_id))
     conn.commit()
 
 

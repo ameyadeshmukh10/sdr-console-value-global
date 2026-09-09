@@ -280,6 +280,26 @@ def cmd_enroll(args):
         print(f"enroll: all contacts suppressed. {counts}")
         return 0
 
+    # Monthly volume guardrail (client program: 1,500-3,000 contacts/month,
+    # depth over volume). Counts contacts stamped enrolled_at this calendar
+    # month; truncates this run at the remainder and refuses at the cap.
+    cap = int(os.environ.get("ENROLL_MONTHLY_CAP", "3000") or 3000)
+    if cap > 0:
+        month_start = db.now()[:7] + "-01T00:00:00Z"
+        used = conn.execute(
+            "SELECT COUNT(*) FROM contacts WHERE status='enrolled' "
+            "AND enrolled_at IS NOT NULL AND enrolled_at >= ?", (month_start,)).fetchone()[0]
+        remaining = cap - used
+        if remaining <= 0:
+            print(f"enroll: monthly cap reached ({used}/{cap} this month) — nothing enrolled. "
+                  f"Raise ENROLL_MONTHLY_CAP only with the client's sign-off.")
+            return 0
+        if len(rows) > remaining:
+            counts["deferred_over_cap"] = len(rows) - remaining
+            print(f"note: monthly cap {used}/{cap} — enrolling {remaining} of {len(rows)} "
+                  f"eligible contacts, deferring {len(rows) - remaining}.")
+            rows = rows[:remaining]
+
     # Resolve campaign + copy per contact (local, fast). Skip missing-file /
     # no-campaign here so the network phase only sees real work. Build the
     # HeyReach pair now too (local) — it's batch-added after a successful enroll.
