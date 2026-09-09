@@ -867,6 +867,24 @@ def generate_one(contact, knowledge, client, write=True, variant=DEFAULT_VARIANT
     """
     domain = (contact.get("domain") or db.email_domain(contact.get("email")))
 
+    # Fusion suppression guard: a pure-Fusion estate (Fusion detected, no
+    # on-prem ERP) is not a prospect — ROAD cannot archive out of Fusion.
+    # Normally these accounts are stopped at the segment gate; this catches
+    # any path around it without spending an API call.
+    try:
+        import suppression as _sup  # stdlib-only
+        conn = db.connect()
+        try:
+            sig_row = db.get_signal(conn, domain)
+        finally:
+            conn.close()
+        if _sup.fusion_only_detected(sig_row) is True:
+            return {"contact_id": contact["contact_id"], "status": "failed",
+                    "issues": ["suppressed: Fusion-only estate — not a prospect"],
+                    "used_cache": True}
+    except Exception as e:  # noqa: BLE001 — the guard must never break generation
+        sys.stderr.write(f"[generate] fusion guard skipped for {domain}: {e}\n")
+
     seg = (contact.get("segment") or "").strip()
     if contact.get("variant") == ERP_VARIANT or seg in ERP_PLAYS:
         verdict = _segment_verdict(domain, seg)

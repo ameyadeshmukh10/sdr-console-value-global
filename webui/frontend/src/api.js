@@ -81,6 +81,10 @@ export const api = {
   approveSegments: (body) => post('/api/segments/approve', body),
   intelRun: () => post('/api/intel/run'),
   intelStatus: () => get('/api/intel/status'),
+  // Account suppression list (client do-not-contact accounts)
+  suppression: () => get('/api/suppression'),
+  suppressionUpload: (csv, replace) => post('/api/suppression/upload', { csv, replace }),
+  suppressionRemove: (id) => post('/api/suppression/remove', { id }),
   updateOutreach: (id, body) => post('/api/outreach/' + encodeURIComponent(id) + '/update', body),
   approveOutreach: (body) => post('/api/outreach/approve', body),
   ingest: (listId) => post('/api/ingest', { list_id: listId }),

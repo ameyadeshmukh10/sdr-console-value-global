@@ -5,6 +5,7 @@ import ListPicker from '../components/ListPicker.jsx'
 import SourcePanel from '../components/SourcePanel.jsx'
 import SlaPanel from '../components/SlaPanel.jsx'
 import CsvAudiencePanel from '../components/CsvAudiencePanel.jsx'
+import SuppressionPanel from '../components/SuppressionPanel.jsx'
 
 // Pillar 1 — Use: get contacts into the pipeline. Three ways: a HubSpot list
 // (contact lists pull + init directly from the picker; company lists enrich the
@@ -97,6 +98,8 @@ export default function UsePage() {
       </div>
 
       {picked && isCompany && <SourcePanel list={picked} />}
+
+      <SuppressionPanel />
 
       <CsvAudiencePanel />
 

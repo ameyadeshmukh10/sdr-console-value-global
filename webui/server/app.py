@@ -114,6 +114,7 @@ import batch_db as pipeline_db        # noqa: E402
 import heyreach_activity              # noqa: E402
 import mongo_store                    # noqa: E402  (lazy pymongo — safe without it)
 import orchestration_config           # noqa: E402  (no I/O at import; parses on request)
+import suppression                    # noqa: E402  (account do-not-contact + Fusion rule)
 
 PERSONA_ENV = {
     "sales-leadership": "BISON_CAMPAIGN_SALES_LEADERSHIP",
@@ -3783,8 +3784,9 @@ SEGMENT_LABELS = {
     "license_audit": "License audit", "ebs_oci": "EBS on OCI",
     "ebs_performance": "EBS performance",
     "hiring": "Hiring (sales roles)", "no_signals": "No signals found",
+    "suppressed": "Suppressed — do not contact",
 }
-SEGMENT_ORDER = ERP_TRIGGER_ORDER + ["hiring", "no_signals"]
+SEGMENT_ORDER = ERP_TRIGGER_ORDER + ["hiring", "no_signals", "suppressed"]
 
 
 def _bdb():
@@ -3922,6 +3924,23 @@ def _gated_accounts_with_signals():
                 "WHERE COALESCE(gated,0)=1 AND account_approved_at IS NULL "
                 "AND domain IS NOT NULL AND domain != '' "
                 "GROUP BY domain ORDER BY COUNT(*) DESC, domain")]
+            # roll the contacts' import-time quality flags up per account so the
+            # reviewer sees "2 non-US/CA · healthcare" before approving
+            flags_by_domain = {}
+            for r in conn.execute(
+                    "SELECT domain, import_flags FROM contacts "
+                    "WHERE COALESCE(gated,0)=1 AND account_approved_at IS NULL "
+                    "AND import_flags IS NOT NULL AND import_flags != ''"):
+                try:
+                    flags = json.loads(r["import_flags"]) or []
+                except (ValueError, TypeError):
+                    continue
+                agg = flags_by_domain.setdefault(r["domain"], {})
+                for f in flags:
+                    agg[f] = agg.get(f, 0) + 1
+            for a in accounts:
+                if a["domain"] in flags_by_domain:
+                    a["flags"] = flags_by_domain[a["domain"]]
             sig = {}
             if accounts:
                 doms = [a["domain"] for a in accounts]
@@ -3929,7 +3948,7 @@ def _gated_accounts_with_signals():
                 for r in conn.execute(
                         f"SELECT domain, news_signals, news_detail, news_checked_at, news_error, "
                         f"hiring_signals, hiring_detail, hiring_checked_at, "
-                        f"tech_signals, tech_checked_at FROM account_signals "
+                        f"tech_signals, tech_detail, tech_checked_at FROM account_signals "
                         f"WHERE domain IN ({qmarks})", doms):
                     sig[r["domain"]] = dict(r)
             return accounts, sig
@@ -3937,15 +3956,53 @@ def _gated_accounts_with_signals():
         return [], {}
 
 
+def _suppression_rules():
+    """Active account-suppression rules (degrades to [])."""
+    try:
+        with db_connect() as conn:
+            return suppression.load_rules(conn)
+    except sqlite3.Error:
+        return []
+
+
+def _account_suppression(a, row, rules):
+    """Why this account must not be contacted, or None. Two hard reasons:
+    a hard suppression-list match (client's do-not-contact list — checked even
+    before research lands) and a Fusion-only tech detection (ROAD cannot
+    archive out of Fusion; Fusion + on-prem co-detection is mid-migration and
+    stays). A SOFT list match annotates the account for review instead."""
+    rule, kind = (suppression.match(a.get("company") or "", a.get("domain") or "", rules)
+                  if rules else (None, ""))
+    if rule and kind in ("exact", "domain", "containment"):
+        return {"kind": "account_list", "rule": rule["name"], "match": kind,
+                "label": f"Do-not-contact list: {rule['name']}"}
+    if suppression.fusion_only_detected(row) is True:
+        return {"kind": "fusion", "rule": None, "match": "tech",
+                "label": "Oracle Fusion detected, no on-prem ERP — not a prospect"}
+    if rule:
+        a["suppression_review"] = {"rule": rule["name"], "match": kind}
+    return None
+
+
 def segments_payload():
     """Stage-3 view: accounts awaiting approval, grouped into signal segments
     (an account sits in every segment it matched), plus the ones whose research
-    hasn't landed yet and the intel job state. Read-only; never 500."""
+    hasn't landed yet and the intel job state. Suppressed accounts (list match
+    or Fusion-only detection) sit ONLY in the 'suppressed' segment. Read-only;
+    never 500."""
     accounts, sig = _gated_accounts_with_signals()
+    rules = _suppression_rules()
     seg_accounts = {sid: [] for sid in SEGMENT_ORDER}
     pending = []
     for a in accounts:
         row = sig.get(a["domain"])
+        sup = _account_suppression(a, row, rules)
+        if sup:
+            a["suppressed"] = sup
+            seg_accounts["suppressed"].append(
+                {**a, "segment": "suppressed", "score": None, "headline": sup["label"],
+                 "date": "", "tech": (row or {}).get("tech_signals") or ""})
+            continue
         if not row or row.get("news_signals") is None:  # news is the definitive researcher
             missing = [k for k, done in (
                 ("tech", bool((row or {}).get("tech_checked_at"))),
@@ -3980,15 +4037,26 @@ def do_approve_segments(segments=None, domains=None, approve_all=False):
     no_signals); trigger winners generate through the erp-trigger path.
     Batches the approved contacts and auto-starts generation on the new
     batches. Returns (payload, status)."""
-    selected = {s for s in (segments or []) if s in SEGMENT_LABELS}
+    # 'suppressed' is a display bucket, never an approvable segment.
+    selected = {s for s in (segments or []) if s in SEGMENT_LABELS and s != "suppressed"}
     want_domains = {str(d).strip().lower() for d in (domains or []) if str(d).strip()}
     if not (approve_all or selected or want_domains):
         return {"ok": False, "error": "nothing selected — pass segments, domains, or all"}, 400
 
     accounts, sig = _gated_accounts_with_signals()
-    approvals = []
+    rules = _suppression_rules()
+    approvals, overridden = [], []
     for a in accounts:
         row = sig.get(a["domain"])
+        sup = _account_suppression(a, row, rules)
+        if sup:
+            # Suppressed accounts never ride approve-all / segment selection.
+            # An EXPLICIT domain is the human override path — allow, but log.
+            if a["domain"] not in want_domains:
+                continue
+            overridden.append({"domain": a["domain"], "reason": sup["label"]})
+            print(f"[segments] OVERRIDE: approving suppressed account {a['domain']} "
+                  f"({sup['label']})", flush=True)
         if not row or row.get("news_signals") is None:
             # research hasn't landed: only an explicit domain (or approve-all)
             # can push it through, and it goes down the default path
@@ -4031,8 +4099,42 @@ def do_approve_segments(segments=None, domains=None, approve_all=False):
         generation, _ = start_generate_job(res["batch_ids"])
     return {"ok": True, "approved_accounts": len(approvals),
             "approved_contacts": res.get("contacts", 0),
+            "suppression_overridden": overridden,
             "new_batches": res.get("batches", 0), "batch_ids": res.get("batch_ids", []),
             "generation": generation}, 200
+
+
+# ---- suppression list management (client do-not-contact accounts) ------------
+def suppression_payload():
+    """Active rules + how they land on the accounts currently at the segment
+    gate. Read-only; never 500."""
+    rules = _suppression_rules()
+    accounts, sig = _gated_accounts_with_signals()
+    hard = soft = fusion = 0
+    for a in accounts:
+        rule, kind = (suppression.match(a.get("company") or "", a.get("domain") or "", rules)
+                      if rules else (None, ""))
+        if rule and kind in ("exact", "domain", "containment"):
+            hard += 1
+        elif rule:
+            soft += 1
+        if suppression.fusion_only_detected(sig.get(a["domain"])) is True:
+            fusion += 1
+    return {"ok": True, "rules": rules, "active_rules": len(rules),
+            "gated_accounts": len(accounts), "hard_matches": hard,
+            "soft_matches": soft, "fusion_only": fusion}
+
+
+def do_suppression_upload(csv_text, replace=False, by=None):
+    """Load do-not-contact rules from CSV text (name[,domain[,reason]])."""
+    rows = suppression.parse_rules_csv(csv_text or "")
+    if not rows:
+        return {"ok": False, "error": "no account names found — one name per line, "
+                                      "optionally name,domain,reason"}, 400
+    added, total = suppression.load_rules_rows(rows, replace=bool(replace),
+                                               source="console-upload", by=by)
+    return {"ok": True, "added": added, "active_rules": total,
+            "rows_in_file": len(rows)}, 200
 
 
 # ---- outreach gate (stage 5-6: edit + approve the generated copy) ------------
@@ -4340,6 +4442,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/segments":
                 return self._json(segments_payload())
+            if path == "/api/suppression":
+                return self._json(suppression_payload())
             if path == "/api/intel/status":
                 job = latest_intel_job()
                 return self._json({"ok": True, "job": job,
@@ -4520,6 +4624,22 @@ class Handler(BaseHTTPRequestHandler):
                                                          csv_text, by=me))
                 finally:
                     INGEST_LOCK.release()
+            if path == "/api/suppression/upload":
+                body = self._read_body()
+                me = verify_token(bearer_from_headers(self.headers))
+                payload, code = do_suppression_upload(body.get("csv"),
+                                                      replace=bool(body.get("replace")), by=me)
+                return self._json(payload, code=code)
+            if path == "/api/suppression/remove":
+                body = self._read_body()
+                try:
+                    rid = int(body.get("id"))
+                except (TypeError, ValueError):
+                    return self._error(400, "id required")
+                n = suppression.deactivate_rule(rid)
+                if not n:
+                    return self._error(404, f"no active rule {rid}")
+                return self._json({"ok": True, "removed": n})
             if path.startswith("/api/audiences/") and path.endswith("/rename"):
                 aid = path[len("/api/audiences/"):-len("/rename")]
                 body = self._read_body()

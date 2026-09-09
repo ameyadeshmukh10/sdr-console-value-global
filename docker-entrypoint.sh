@@ -11,6 +11,14 @@ set -e
 SEED=/app/seed-data
 DATA=/app/data
 
+# One-shot volume reset: PURGE_DATA_ON_BOOT=1 wipes the live data dir before the
+# seed check (used once to clear the EverWorker template data the volume was
+# first seeded with — set it for one deploy, then REMOVE the variable).
+if [ "$PURGE_DATA_ON_BOOT" = "1" ] && [ -d "$DATA" ]; then
+  echo "[entrypoint] !!! PURGE_DATA_ON_BOOT=1 — wiping $DATA (all pipeline data) !!!"
+  rm -rf "$DATA"/* "$DATA"/.boot-marker.json 2>/dev/null || true
+fi
+
 SEEDED=0
 if [ ! -f "$DATA/outreach/pipeline.db" ] && [ -d "$SEED" ]; then
   echo "[entrypoint] empty data dir — seeding $DATA from baked-in snapshot ..."

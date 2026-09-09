@@ -74,7 +74,12 @@ def init_schema(conn):
         gated       INTEGER DEFAULT 0,
         segment     TEXT,
         account_approved_at TEXT,
-        approved_at TEXT
+        approved_at TEXT,
+        country     TEXT,
+        industry    TEXT,
+        employees   TEXT,
+        import_flags TEXT,
+        enrolled_at TEXT
     );
     CREATE TABLE IF NOT EXISTS batches (
         batch_id     INTEGER PRIMARY KEY,
@@ -173,6 +178,21 @@ def init_schema(conn):
     );
     CREATE INDEX IF NOT EXISTS idx_unenroll_contact ON unenrollment_log(contact_id);
     CREATE INDEX IF NOT EXISTS idx_unenroll_rule    ON unenrollment_log(rule, status);
+    -- Client account suppression list (suppression.py). Name-based rules — the
+    -- client's list carries no domains — enforced at CSV ingest, the segment
+    -- gate, and enrollment. active=0 rows are soft-deleted (kept for audit).
+    CREATE TABLE IF NOT EXISTS suppression_accounts (
+        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        name      TEXT NOT NULL,
+        name_norm TEXT NOT NULL,
+        domain    TEXT,
+        reason    TEXT,
+        source    TEXT,
+        added_by  TEXT,
+        added_at  TEXT,
+        active    INTEGER DEFAULT 1
+    );
+    CREATE INDEX IF NOT EXISTS idx_suppr_norm ON suppression_accounts(name_norm);
     CREATE INDEX IF NOT EXISTS idx_contacts_batch  ON contacts(batch_id);
     CREATE INDEX IF NOT EXISTS idx_contacts_status ON contacts(status);
     CREATE INDEX IF NOT EXISTS idx_hsact_contact   ON hubspot_activity_log(contact_id);
@@ -193,7 +213,12 @@ def init_schema(conn):
     # approval-flow columns (additive; pre-gate rows read as gated=0 = autonomous)
     if "gated" not in cols:
         conn.execute("ALTER TABLE contacts ADD COLUMN gated INTEGER DEFAULT 0")
-    for col in ("segment", "account_approved_at", "approved_at"):
+    for col in ("segment", "account_approved_at", "approved_at",
+                # lead-quality columns (VG, 2026-09): carried from the CSV so geo /
+                # industry / size rules are enforceable + auditable per contact
+                "country", "industry", "employees", "import_flags",
+                # stamped at Bison enrollment; drives the monthly volume counter
+                "enrolled_at"):
         if col not in cols:
             conn.execute(f"ALTER TABLE contacts ADD COLUMN {col} TEXT")
     # Gate the backfill behind a read: the UPDATE grabs the single WAL write
@@ -229,9 +254,12 @@ def upsert_contacts(conn, rows, gated=False):
     before = conn.execute("SELECT COUNT(*) FROM contacts").fetchone()[0]
     conn.executemany("""
         INSERT OR IGNORE INTO contacts
-          (contact_id, first_name, last_name, email, title, company, linkedin_url, persona, domain, variant, gated, status, updated_at)
-        VALUES (:contact_id,:first_name,:last_name,:email,:title,:company,:linkedin_url,:persona,:domain,:variant,:gated,'pending',:ts)
-    """, [{"variant": None, **r,
+          (contact_id, first_name, last_name, email, title, company, linkedin_url, persona, domain, variant, gated,
+           country, industry, employees, import_flags, status, updated_at)
+        VALUES (:contact_id,:first_name,:last_name,:email,:title,:company,:linkedin_url,:persona,:domain,:variant,:gated,
+                :country,:industry,:employees,:import_flags,'pending',:ts)
+    """, [{"variant": None, "country": None, "industry": None, "employees": None,
+           "import_flags": None, **r,
            "domain": r.get("domain") or email_domain(r.get("email")),
            "gated": 1 if gated else 0, "ts": now()} for r in rows])
     conn.commit()
@@ -265,7 +293,8 @@ def assign_batches(conn, batch_size=25):
 
 def get_batch(conn, batch_id):
     return [dict(r) for r in conn.execute(
-        "SELECT contact_id, first_name, last_name, email, title, company, linkedin_url, persona, domain, variant, segment "
+        "SELECT contact_id, first_name, last_name, email, title, company, linkedin_url, persona, domain, variant, segment, "
+        "country, industry, employees, import_flags "
         "FROM contacts WHERE batch_id=? ORDER BY domain, rowid", (batch_id,))]
 
 
