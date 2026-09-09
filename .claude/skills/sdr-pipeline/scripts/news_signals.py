@@ -92,8 +92,20 @@ NEWS_PROPERTY = "erp_news_signals"
 NEWS_PROPERTY_LABEL = "ERP News Signals"
 MAX_TOKENS = 1500        # a verdict is small; searching happens server-side
 CALL_TIMEOUT = 300       # seconds per trigger call (web search rounds are slow)
-HEADLINE_MAX = 160       # chars kept from a model headline
+HEADLINE_MAX = 300       # chars kept from a model headline (word-boundary + ellipsis)
 LINE_HEADLINE_MAX = 100  # chars of headline shown in the news_signals line
+
+
+def _truncate(text, limit):
+    """Cut on a word boundary with an ellipsis instead of a mid-word hard slice
+    (the drawer renders these verbatim, so a bare slice reads as cut off)."""
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit - 1]
+    if " " in cut[limit // 2:]:
+        cut = cut[:cut.rfind(" ")]
+    return cut.rstrip() + "…"
 
 
 def log(msg):
@@ -403,10 +415,10 @@ def classify_verdict(data):
     score = max(0, min(100, score))
     if not found:
         score = 0
-    headline = str(data.get("headline") or "").strip()[:HEADLINE_MAX]
-    summary = str(data.get("summary") or "").strip()[:800]
+    headline = _truncate(str(data.get("headline") or ""), HEADLINE_MAX)
+    summary = _truncate(str(data.get("summary") or ""), 800)
     if found and not headline:
-        headline = summary[:120] or "signal found"
+        headline = _truncate(summary, 160) or "signal found"
     details = data.get("details")
     if not isinstance(details, dict):
         details = {}

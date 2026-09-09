@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api.js'
 import { Spinner, ErrorBanner, num } from './ui.jsx'
+import SignalDetail from './SignalDetail.jsx'
 
 // Stage 2-4 of the gated flow: after a list pull / CSV upload, signal
 // intelligence (tech + hiring + the 5 ERP news triggers) researches the pulled
@@ -19,6 +20,7 @@ export default function SegmentsPanel({ onChanged, onGeneration }) {
   const [busy, setBusy] = useState(null) // segment id | 'all' | 'intel'
   const [selected, setSelected] = useState({}) // segment id -> true
   const [openSeg, setOpenSeg] = useState(null)
+  const [openDomain, setOpenDomain] = useState(null) // account row → signal drawer
   const [result, setResult] = useState(null)
 
   const load = useCallback(() => {
@@ -164,11 +166,14 @@ export default function SegmentsPanel({ onChanged, onGeneration }) {
             if (!s) return null
             return (
               <div className="panel" style={{ padding: 0, marginBottom: 12, maxHeight: 300, overflow: 'auto' }}>
+                <p className="muted" style={{ fontSize: 12, margin: '10px 14px 0' }}>
+                  Click a row for the full signal detail.
+                </p>
                 <table className="dense">
                   <thead><tr><th>Account</th><th>Contacts</th>{s.kind === 'trigger' && <th>Score</th>}<th>Signal</th></tr></thead>
                   <tbody>
                     {s.accounts.map((a) => (
-                      <tr key={a.domain}>
+                      <tr key={a.domain} className="clickable" onClick={() => setOpenDomain(a.domain)}>
                         <td>
                           <span className="mono">{a.domain}</span>
                           {a.company && <span className="muted" style={{ marginLeft: 8 }}>{a.company}</span>}
@@ -210,6 +215,12 @@ export default function SegmentsPanel({ onChanged, onGeneration }) {
       )}
       {segs.length === 0 && !intelRunning && pending.length === 0 && !nothing && (
         <div className="empty">No researched accounts to segment yet.</div>
+      )}
+      {openDomain && (
+        // Same drawer as the Signals page; its onChanged hands back the
+        // /api/signals payload, which is NOT the segments shape — just re-pull
+        // this panel's own data so counts stay current after drawer actions.
+        <SignalDetail domain={openDomain} onClose={() => setOpenDomain(null)} onChanged={() => load()} />
       )}
     </div>
   )
