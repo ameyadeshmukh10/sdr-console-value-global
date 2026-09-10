@@ -265,19 +265,36 @@ triggers, via the Anthropic Messages API + server-side `web_search` (the same ch
   best-effort; `NEWS_HUBSPOT_WRITEBACK=0` kills it).
 - **Composite signal (2026-09):** when a scan FOUND ≥1 trigger, `detect_and_store` makes
   one extra no-web-search call (`compose_signal`) that synthesizes the verdicts + tech/
-  hiring context into the account's top-line `signal` (stored via `upsert_signal`, so
-  `researched_at`/`has_recent` populate and the Signals table/drawer Signal field is no
-  longer empty for scan-created rows). Never blanks an existing signal (found_count 0 =
-  no write); outcome recorded in `news_detail.composite`; `NEWS_COMPOSITE_SIGNAL=0` kills
-  it. Both prompts anchor today's date and forbid adopting a stale source's tense (a
-  past "projected go-live" is a completed event — the 2026-09 date-reasoning fix).
-- **Cost gotcha (load-bearing):** every non-skipped scan is up to 5 web-search API
-  calls — run first backfills with `--limit`, and remember the post-batch tail
-  researches every new domain a batch touches.
+  hiring context (re-read fresh post-scan) into the account's top-line `signal`. Stored
+  via **`upsert_composite_signal` — fill-only**: a fresh (<90d) generation-researched
+  signal always wins, `company_name` is never touched, `has_recent` derives from
+  non-proxy triggers. **Deliberate consequence:** the fresh `researched_at` makes
+  `generate_batch`'s default/SLA path reuse the composite as cached research (no new
+  web search) for 90 days — the composite prompt therefore writes neutral factual
+  research prose, never SDR meta-commentary; the erp-trigger path is unaffected.
+  Failures/empty outputs are stderr-logged and recorded in `news_detail.composite`
+  ({ok, stored, error}); a max_tokens-truncated output is never stored;
+  `NEWS_COMPOSITE_SIGNAL=0` kills it. Both prompts anchor today's date (UTC — matches
+  the stored clocks) and forbid adopting a stale source's tense (a past "projected
+  go-live" is a completed event — the 2026-09 date-reasoning fix).
+- **Verdict guards (`_apply_verdict_guards`):** deterministic backstops after
+  `classify_verdict`, sync and stored-data alike — license_audit found floor 55,
+  ebs_performance score cap 75, ma_carveout 90-day recency window (month
+  granularity). Downgrades keep the evidence in `details` (`below_found_bar` /
+  `outside_window`) with only a short summary marker. **Migrations for
+  already-stored rows:** `news_signals.py --refloor` (DB-only, preserves freshness
+  clocks) and `--recompose` (composites for stored found rows; API spend, use
+  `--limit`).
+- **Cost gotcha (load-bearing):** every non-skipped scan is up to 6 API calls (5
+  research × 3-4 searches, ≤16 total, + 1 composite) — run first backfills with
+  `--limit`, and remember the post-batch tail researches every new domain a batch
+  touches.
 - **Copy consumer (2026-09):** the gated approval flow (section below) consumes the
   verdicts — contacts approved through a trigger segment generate via
   `generate_batch.py`'s **erp-trigger** path, which anchors email 1 on the stored
-  verdict. Autonomous (SLA) generation still ignores `news_signals`.
+  verdict. Autonomous (SLA) generation never reads the `news_signals` column or the
+  erp-trigger path — but since 2026-09 it DOES reach news research indirectly: a fresh
+  composite in `signal` is reused as its cached research (see the composite bullet).
 
 ## Gated approval flow — segments → review → enroll (added 2026-09)
 

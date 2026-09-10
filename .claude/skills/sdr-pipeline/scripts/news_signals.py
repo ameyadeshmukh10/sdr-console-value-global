@@ -9,8 +9,10 @@ same research channel generate_batch.py uses) and stores the verdicts on the
                     migration 70: hiring S/4HANA leads" (found triggers, score
                     descending; or the literal "No ERP news signals detected";
                     NULL only if the scan itself failed — every trigger errored)
-    news_detail     JSON: {triggers: {id: verdict}, found_count, top,
-                    web_searches, duration_ms, model, max_searches, hubspot}
+    news_detail     JSON: {triggers: {id: verdict}, found_count, web_searches,
+                    duration_ms, model, max_searches (per-trigger dict of the
+                    researched budgets), hubspot, composite ({ok, stored,
+                    error} — present when the composite step ran)}
     news_checked_at ISO-8601 Z; scans are reused for NEWS_REFRESH_DAYS (30 —
                     shorter than tech/hiring because most triggers carry a
                     90-day recency window)
@@ -53,9 +55,15 @@ hubspot_client._load_dotenv, both stdlib). anthropic_client (also stdlib) is
 imported lazily so webui/server/app.py keeps booting with no ANTHROPIC_API_KEY
 — `news_available()` reports why research is off instead of crashing.
 
+A scan that FOUND >=1 trigger also synthesizes a composite `signal` (one extra
+no-web-search call; fill-only via upsert_composite_signal — a fresh
+generation-researched signal always wins, company_name is never touched).
+Copy generation's default path treats that fresh signal as cached research.
+
 Env knobs: NEWS_DETECT_ENABLED (post-batch tail hook), NEWS_REFRESH_DAYS (30),
-NEWS_MAX_SEARCHES (4), NEWS_MODEL (defaults to CLAUDE_MODEL), NEWS_TRIGGERS
-(comma-scoped trigger ids, default all), NEWS_HUBSPOT_WRITEBACK (1).
+NEWS_MAX_SEARCHES (unset = per-trigger caps 3-4; integers clamp to >=1),
+NEWS_MODEL (defaults to CLAUDE_MODEL), NEWS_TRIGGERS (comma-scoped trigger
+ids, default all), NEWS_HUBSPOT_WRITEBACK (1), NEWS_COMPOSITE_SIGNAL (1).
 
 CLI (run_script conventions: progress lines on stderr, JSON summary as the
 LAST stdout line):
@@ -65,9 +73,13 @@ LAST stdout line):
     python3 news_signals.py --missing [--stale-days N] [--limit N]
                             [--workers N] [--force] [--no-hubspot]
     python3 news_signals.py --self-test      # offline; no network, no key
+    python3 news_signals.py --refloor [--dry-run] [--limit N]   # guard stored verdicts (DB-only)
+    python3 news_signals.py --recompose [--limit N] [--force]   # composites for stored found rows
 
-Every non-skipped scan costs real Anthropic spend (up to 5 web-search calls),
-so prefer --limit on a first bulk backfill.
+Every non-skipped scan costs real Anthropic spend — up to 6 API calls (5
+research with 3-4 web searches each, capped at 16 total, plus 1 no-search
+composite when triggers were found) — so prefer --limit on a first bulk
+backfill.
 """
 
 import argparse
@@ -77,7 +89,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import batch_db as db
@@ -107,6 +119,14 @@ def _truncate(text, limit):
     if " " in cut[limit // 2:]:
         cut = cut[:cut.rfind(" ")]
     return cut.rstrip() + "…"
+
+
+def _utcnow():
+    """Timezone-aware UTC now. The prompts' 'today'/cutoff and the stored
+    news_checked_at (batch_db.now(), UTC) must agree — naive local time drifts
+    a day either side of midnight on non-UTC hosts, and these prompts reason
+    about dates."""
+    return datetime.now(timezone.utc)
 
 
 def log(msg):
@@ -158,6 +178,35 @@ def _clean_domain(domain):
     return d or None
 
 
+_WARNED_ENV = set()
+
+
+def _news_search_override():
+    """NEWS_MAX_SEARCHES, parsed strictly: unset/blank -> None (the per-trigger
+    caps apply); any integer -> clamped to >=1 (an explicit 0 still means 'the
+    minimum', as before the per-trigger caps existed); malformed -> warn once
+    and ignore rather than silently disabling the operator's override."""
+    raw = (os.environ.get("NEWS_MAX_SEARCHES") or "").strip()
+    if not raw:
+        return None
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        if raw not in _WARNED_ENV:
+            _WARNED_ENV.add(raw)
+            log(f"NEWS_MAX_SEARCHES={raw!r} is not an integer — override ignored")
+        return None
+
+
+def _max_searches(tid):
+    """Per-trigger web-search budget: NEWS_MAX_SEARCHES (when set) overrides
+    everything, then TRIGGERS[..]["max_searches"], then 4. Caps tuned from the
+    2026-09 live run (1,262 accounts): found verdicts needed a 4th search only
+    on erp_migration (median 4); ma_carveout found at median 2, ebs_oci ≤3."""
+    env = _news_search_override()
+    return env if env is not None else (TRIGGERS[tid].get("max_searches") or 4)
+
+
 # ---- trigger instruction sets ------------------------------------------------
 # Each brief is the user message for one Messages call. Placeholders: {company}
 # {domain} {cutoff_date} {max_searches} plus per-trigger context tokens filled
@@ -205,6 +254,10 @@ TRIGGERS = {
     "ma_carveout": {
         "label": "M&A carve-out",
         "max_searches": 3,  # live run: found verdicts at median 2 searches; only 2/84 used a 4th
+        # Deterministic backstop for the brief's "LAST 90 DAYS" rule (month
+        # granularity — a found verdict dated strictly before the cutoff month
+        # is downgraded; the boundary month is kept).
+        "recent_window_days": 90,
         "brief": """\
 # Trigger: M&A Carve-Out — an acquisition or divestiture announced in the LAST 90 DAYS
 Why it matters (context only, never quote it): when a company divests or acquires, the separated
@@ -328,6 +381,7 @@ unrelated to EBS (analytics, a website).
         "label": "EBS performance",
         "requires_ebs": True,
         "max_searches": 3,  # proxy-only trigger; rarely runs (EBS pre-condition)
+        "max_found_score": 75,  # deterministic backstop for the brief's "cap the score at 75"
         "brief": """\
 # Trigger: EBS performance pain (month-end close, table locks, batch overruns)
 Pre-condition, already verified: our deterministic technographic scan detected Oracle E-Business
@@ -402,7 +456,7 @@ def _cross_context(trigger_id, prior):
 
 
 def build_system(max_searches):
-    return SYSTEM_PROMPT.format(today=datetime.now().strftime("%B %d, %Y"),
+    return SYSTEM_PROMPT.format(today=_utcnow().strftime("%B %d, %Y"),
                                 max_searches=max_searches)
 
 
@@ -410,7 +464,7 @@ def build_user(trigger_id, company, domain, max_searches, tech_line=None, prior=
     """The user message for one trigger call. prior = upstream verdict for
     cross-referenced triggers (see TRIGGERS[..]['context_from'])."""
     spec = TRIGGERS[trigger_id]
-    cutoff = (datetime.now() - timedelta(days=90)).strftime("%B %d, %Y")
+    cutoff = (_utcnow() - timedelta(days=90)).strftime("%B %d, %Y")
     tech_context = f" (scan result: {tech_line})" if tech_line else ""
     brief = spec["brief"].format(
         company=company or domain, cutoff_date=cutoff, max_searches=max_searches,
@@ -453,15 +507,65 @@ def classify_verdict(data):
             "details": details}
 
 
+def _found_sorted(trigger_results):
+    """Found verdicts strongest-first with the canonical trigger order as the
+    tiebreaker — the ONE sort every renderer (display line, composite prompt,
+    HubSpot property) shares, so "strongest" never disagrees between surfaces."""
+    order = list(TRIGGERS)
+    found = [(tid, r) for tid, r in trigger_results.items()
+             if isinstance(r, dict) and r.get("found")]
+    found.sort(key=lambda x: (-(x[1].get("score") or 0),
+                              order.index(x[0]) if x[0] in order else len(order)))
+    return found
+
+
+def _apply_verdict_guards(trigger_id, out, today=None):
+    """Deterministic backstops applied after classify_verdict, mirroring each
+    brief's hard rules so a drifting model can never seed a segment it
+    shouldn't (the 2026-09 run showed prompt-only bars drift):
+    - max_found_score (ebs_performance 75): clamp a found score to the cap.
+    - recent_window_days (ma_carveout 90): a found verdict whose YYYY-MM date
+      is strictly older than the cutoff month is outside the window -> not
+      found (month granularity: the boundary month is conservatively kept).
+    - min_found_score (license_audit 55): a weak found -> not found.
+    Downgrades keep the evidence: the original score/headline move losslessly
+    into details, and the summary gets only a short bracketed marker."""
+    spec = TRIGGERS[trigger_id]
+
+    def _downgrade(key, marker):
+        out["details"] = {**(out.get("details") or {}),
+                          key: {"score": out.get("score"), "headline": out.get("headline")}}
+        out["summary"] = _truncate(f"{marker} {out.get('summary') or ''}", 800)
+        out["found"], out["score"], out["headline"] = False, 0, ""
+
+    cap = spec.get("max_found_score")
+    if cap and out.get("found") and (out.get("score") or 0) > cap:
+        out["score"] = cap
+    window = spec.get("recent_window_days")
+    if window and out.get("found") and out.get("date"):
+        try:
+            y, m = int(str(out["date"])[:4]), int(str(out["date"])[5:7])
+            cut = (today or _utcnow()) - timedelta(days=window)
+            if (y, m) < (cut.year, cut.month):
+                _downgrade("outside_window",
+                           f"[event dated {out['date']}, outside the {window}-day window]")
+                return
+        except (ValueError, TypeError):
+            pass
+    floor = spec.get("min_found_score")
+    if floor and out.get("found") and (out.get("score") or 0) < floor:
+        _downgrade("below_found_bar",
+                   f"[scored {out.get('score')}, below the {floor}-point found bar]")
+
+
 def format_line(trigger_results):
     """The news_signals display line: found triggers, score descending, as
     '<label> <score>: <headline>' joined with ' · '; NO_NEWS when none found.
     trigger_results = {id: verdict-or-skip dict} (errored/skipped entries are
     simply not found)."""
-    found = [(tid, r) for tid, r in trigger_results.items() if r.get("found")]
+    found = _found_sorted(trigger_results)
     if not found:
         return NO_NEWS
-    found.sort(key=lambda x: (-(x[1].get("score") or 0), list(TRIGGERS).index(x[0])))
     parts = []
     for tid, r in found:
         label = TRIGGERS[tid]["label"]
@@ -492,15 +596,16 @@ Rules:
   sharpens the angle — never list everything.
 - Use ONLY the facts given. Never invent or upgrade a weak signal. Judge every event date relative
   to today — an event in the past is described as past.
-- Write for the SDR who will anchor an email on it, not for the prospect."""
+- Plain factual research prose — no advice, no meta-commentary about outreach or angles, no second
+  person. This text is reused verbatim as cached research context by copy generation, so it must
+  read as a neutral account-research summary: what happened, when, and the data-retirement
+  implication."""
 
 
 def build_composite_user(company, domain, trigger_results, tech_line=None, hiring_line=None):
     """The user message for the composite-signal call: found verdicts score-desc
     plus the deterministic scan context."""
-    found = [(tid, r) for tid, r in trigger_results.items()
-             if isinstance(r, dict) and r.get("found")]
-    found.sort(key=lambda x: -(x[1].get("score") or 0))
+    found = _found_sorted(trigger_results)
     lines = [f"Company: {company or domain} (email domain: {domain})",
              f"Detected tech stack: {tech_line or '(not scanned)'}"]
     if hiring_line:
@@ -516,18 +621,29 @@ def build_composite_user(company, domain, trigger_results, tech_line=None, hirin
 
 def compose_signal(company, domain, trigger_results, tech_line=None, hiring_line=None):
     """Synthesize the composite signal. Returns (text, error) — never raises;
-    (None, <error>) on failure so a bad call never kills the scan."""
+    (None, <error>) on failure. Failures and empty/truncated outputs are
+    stderr-logged (the tech/hiring write-back house pattern) so a
+    systematically failing composite is visible in a backfill's output."""
     try:
         res = _client().complete(
-            COMPOSITE_SYSTEM.format(today=datetime.now().strftime("%B %d, %Y")),
+            COMPOSITE_SYSTEM.format(today=_utcnow().strftime("%B %d, %Y")),
             build_composite_user(company, domain, trigger_results,
                                  tech_line=tech_line, hiring_line=hiring_line),
             max_tokens=400, timeout=120,
         )
-        text = " ".join((res.get("text") or "").split()).strip()
-        return (_truncate(text, 700) or None), None
+        if res.get("stop_reason") == "max_tokens":
+            # A mid-sentence fragment must never become the account's signal.
+            log(f"composite for {domain}: output truncated at max_tokens — not stored")
+            return None, "output truncated at max_tokens"
+        text = _truncate(" ".join((res.get("text") or "").split()).strip(), 700)
+        if not text:
+            log(f"composite for {domain}: model returned empty output")
+            return None, "empty model output"
+        return text, None
     except Exception as exc:  # noqa: BLE001
-        return None, f"{type(exc).__name__}: {exc}"[:300]
+        err = f"{type(exc).__name__}: {exc}"[:300]
+        log(f"composite for {domain} failed: {err}")
+        return None, err
 
 
 def _ebs_detected(row):
@@ -587,13 +703,7 @@ def _research_trigger(trigger_id, company, domain, max_searches, tech_line=None,
         )
         out["web_searches"] = res.get("web_search_count", 0)
         out.update(classify_verdict(extract_json(res["text"])))
-        floor = TRIGGERS[trigger_id].get("min_found_score")
-        if floor and out["found"] and out["score"] < floor:
-            # The model ignored the found bar — downgrade deterministically so a
-            # weak verdict can never seed a segment.
-            out["summary"] = _truncate(
-                f"[below the {floor}-point found bar: {out['headline']}] {out['summary']}", 800)
-            out["found"], out["score"], out["headline"] = False, 0, ""
+        _apply_verdict_guards(trigger_id, out)
     except (AnthropicError, AnthropicJSONError) as exc:
         out["error"] = str(exc)[:300]
     except Exception as exc:  # noqa: BLE001 — one trigger never kills the scan
@@ -615,16 +725,6 @@ def detect_domain(domain, company=None, triggers=None, tech_line=None, ebs=None)
     if not host:
         return {"formatted": None, "triggers": {}, "error": f"invalid domain: {domain!r}",
                 "found_count": 0, "web_searches": 0, "duration_ms": 0, "model": None}
-
-    # Per-trigger search budget: TRIGGERS[..]["max_searches"] wins, then the
-    # global default of 4. NEWS_MAX_SEARCHES (when set) overrides everything —
-    # the explicit-operator escape hatch. Caps are tuned from the 2026-09 live
-    # run (1,262 accounts): found verdicts needed a 4th search only on
-    # erp_migration (median 4); ma_carveout found at median 2, ebs_oci at ≤3.
-    env_max = _env_int("NEWS_MAX_SEARCHES", 0)
-
-    def _max_searches(tid):
-        return max(1, env_max or TRIGGERS[tid].get("max_searches") or 4)
 
     wanted = enabled_triggers(triggers)
     t0 = time.monotonic()
@@ -747,6 +847,15 @@ def detect_and_store(domain, company=None, force=False, hubspot=None, triggers=N
         enabled = _flag("NEWS_HUBSPOT_WRITEBACK", True) if hubspot is None else bool(hubspot)
         hs = hubspot_writeback(host, res["triggers"]) if enabled else {"ok": False, "reason": "disabled"}
 
+    # Re-read the row: the scan blocked for minutes, so the pre-scan snapshot
+    # is stale — concurrent tech/hiring tails may have landed context the
+    # composite should use.
+    conn = _db()
+    try:
+        row = db.get_signal(conn, host)
+    finally:
+        conn.close()
+
     # Composite signal (network call — like the write-back, NEVER hold a DB
     # connection across it). Only when the scan actually found something; a
     # found_count of 0 must never blank an existing signal.
@@ -763,19 +872,34 @@ def detect_and_store(domain, company=None, force=False, hubspot=None, triggers=N
         "web_searches": res["web_searches"],
         "duration_ms": res["duration_ms"],
         "model": res["model"],
-        "max_searches": _env_int("NEWS_MAX_SEARCHES", 0)
-        or {t: TRIGGERS[t].get("max_searches") or 4 for t in res["triggers"] if t in TRIGGERS},
+        # Effective per-trigger budgets, RESEARCHED triggers only (skipped ones
+        # made zero calls), env override + clamp included — one shape always.
+        "max_searches": {t: _max_searches(t) for t, r in res["triggers"].items()
+                         if t in TRIGGERS and isinstance(r, dict) and "skipped" not in r},
         "hubspot": hs,
     }
-    if composite is not None or comp_err is not None:
-        detail["composite"] = {"ok": composite is not None, "error": comp_err}
     conn = _db()
     try:
+        # The composite write goes FIRST (fill-only, never clobbers a fresh
+        # generation-researched signal, never touches company_name) so the
+        # detail the news upsert serializes records what actually happened.
+        stored_composite = False
+        if composite:
+            try:
+                stored_composite = db.upsert_composite_signal(
+                    conn, host, composite, model=res["model"],
+                    has_recent=any(isinstance(r, dict) and r.get("found")
+                                   for t, r in res["triggers"].items()
+                                   if t != "ebs_performance"))
+            except Exception as exc:  # noqa: BLE001 — the news upsert must still land
+                comp_err = f"store failed: {exc}"[:300]
+                log(f"composite store for {host} failed: {exc}")
+        if res["found_count"] > 0 and _flag("NEWS_COMPOSITE_SIGNAL", True):
+            detail["composite"] = {"ok": composite is not None and comp_err is None,
+                                   "stored": stored_composite, "error": comp_err}
         db.upsert_news_signals(conn, host, res["formatted"],
                                news_detail=json.dumps(detail, ensure_ascii=False),
                                news_error=res["error"], company_name=company)
-        if composite:
-            db.upsert_signal(conn, host, company, composite, True, model=res["model"])
         stored = db.get_signal(conn, host) or {}
     finally:
         conn.close()
@@ -794,10 +918,9 @@ _HS_PROPERTY_READY = False
 def property_value(trigger_results):
     """The erp_news_signals company-property value: one line per found trigger
     (score, headline, date, source URL), or the NO_NEWS literal."""
-    found = [(tid, r) for tid, r in trigger_results.items() if r.get("found")]
+    found = _found_sorted(trigger_results)
     if not found:
         return NO_NEWS
-    found.sort(key=lambda x: -(x[1].get("score") or 0))
     lines = []
     for tid, r in found:
         line = f"{TRIGGERS[tid]['label']} ({r.get('score', 0)}): {r.get('headline', '')}"
@@ -892,7 +1015,139 @@ def backfill(domains=None, stale_days=None, limit=None, workers=2, force=False,
     return summary
 
 
+# ---- stored-data migrations (the guards/composite ship after 1,262 rows) ------
+def refloor_stored(limit=None, dry_run=False):
+    """Apply the deterministic verdict guards (found floor / score cap /
+    recency window) to STORED news_detail verdicts — new-scan guards never
+    touch rows already researched, so without this the ~105 weak license_audit
+    verdicts keep seeding the segment until their refresh. DB-only, no API
+    calls; news_checked_at is preserved (a correction, not a re-scan). The
+    recency window is judged as of each row's news_checked_at, not today."""
+    conn = _db()
+    try:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT domain, news_detail, news_checked_at FROM account_signals "
+            "WHERE news_detail IS NOT NULL")]
+    finally:
+        conn.close()
+    if limit:
+        rows = rows[:int(limit)]
+    updates = []
+    for r in rows:
+        try:
+            detail = json.loads(r["news_detail"]) or {}
+        except (ValueError, TypeError):
+            continue
+        triggers = detail.get("triggers") or {}
+        checked = None
+        try:
+            checked = datetime.strptime(r.get("news_checked_at") or "",
+                                        "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            pass
+        touched = False
+        for tid, v in triggers.items():
+            if tid in TRIGGERS and isinstance(v, dict) and v.get("found"):
+                before = (v.get("found"), v.get("score"))
+                _apply_verdict_guards(tid, v, today=checked)
+                if (v.get("found"), v.get("score")) != before:
+                    touched = True
+        if not touched:
+            continue
+        detail["found_count"] = sum(1 for v in triggers.values()
+                                    if isinstance(v, dict) and v.get("found"))
+        updates.append((format_line(triggers),
+                        json.dumps(detail, ensure_ascii=False), r["domain"]))
+    if not dry_run and updates:
+        conn = _db()
+        try:
+            for line, dj, dom in updates:
+                db.update_news_verdicts(conn, dom, line, dj)
+        finally:
+            conn.close()
+    for line, _dj, dom in updates[:20]:
+        log(f"refloor {dom}: {line[:90]}")
+    return {"scanned": len(rows), "changed": len(updates), "dry_run": bool(dry_run)}
+
+
+def recompose_stored(limit=None, force=False):
+    """Synthesize composites for rows whose STORED scan found >=1 trigger but
+    whose signal column is empty or stale — the composite feature shipped
+    after those rows were researched, and the cache-hit skip means they'd
+    otherwise wait out NEWS_REFRESH_DAYS. One no-search API call per row
+    (real spend — use --limit). Fill-only semantics, same as a live scan."""
+    ok, reason = news_available()
+    if not ok:
+        raise RuntimeError(f"news research unavailable: {reason}")
+    conn = _db()
+    try:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT domain, company_name, signal, researched_at, tech_signals, "
+            "hiring_signals, news_detail FROM account_signals "
+            "WHERE news_detail IS NOT NULL ORDER BY updated_at DESC")]
+    finally:
+        conn.close()
+    summary = {"eligible": 0, "attempted": 0, "stored": 0, "skipped_fresh": 0, "errors": 0}
+    for r in rows:
+        try:
+            triggers = (json.loads(r["news_detail"]) or {}).get("triggers") or {}
+        except (ValueError, TypeError):
+            continue
+        if not any(isinstance(v, dict) and v.get("found") for v in triggers.values()):
+            continue
+        summary["eligible"] += 1
+        if not force and (r.get("signal") or "").strip() and db.signal_fresh(r):
+            summary["skipped_fresh"] += 1
+            continue
+        if limit and summary["attempted"] >= int(limit):
+            break
+        summary["attempted"] += 1
+        text, err = compose_signal(r.get("company_name"), r["domain"], triggers,
+                                   tech_line=r.get("tech_signals"),
+                                   hiring_line=r.get("hiring_signals"))
+        if not text:
+            summary["errors"] += 1
+            continue
+        model = None
+        try:
+            model = _client().model
+        except Exception:  # noqa: BLE001
+            pass
+        conn = _db()
+        try:
+            if db.upsert_composite_signal(
+                    conn, r["domain"], text, model=model,
+                    has_recent=any(isinstance(v, dict) and v.get("found")
+                                   for t, v in triggers.items() if t != "ebs_performance")):
+                summary["stored"] += 1
+        finally:
+            conn.close()
+        log(f"[{summary['attempted']}] {r['domain']}: composed")
+    return summary
+
+
 # ---- offline self-test ---------------------------------------------------------
+def _search_override_probe():
+    """Exercise _news_search_override under controlled env, restoring whatever
+    the ambient environment held (a set .env value must never fail — or be
+    destroyed by — the offline gate)."""
+    saved = os.environ.get("NEWS_MAX_SEARCHES")
+    try:
+        results = []
+        for raw in ("0", "four", None):
+            if raw is None:
+                os.environ.pop("NEWS_MAX_SEARCHES", None)
+            else:
+                os.environ["NEWS_MAX_SEARCHES"] = raw
+            results.append(_max_searches("erp_migration"))
+        return results
+    finally:
+        if saved is None:
+            os.environ.pop("NEWS_MAX_SEARCHES", None)
+        else:
+            os.environ["NEWS_MAX_SEARCHES"] = saved
+
+
 _FIXTURE_FOUND = {"found": True, "score": 88, "headline": "Acme completes carve-out of FooCo unit",
                   "summary": "Announced August 2026; PE buyer named.", "date": "2026-08",
                   "source_url": "https://example.com/pr",
@@ -997,6 +1252,36 @@ def self_test():
          TRIGGERS["license_audit"].get("min_found_score") == 55
          and "Never report found=true with a score below 55" in TRIGGERS["license_audit"]["brief"]
          and not any(TRIGGERS[t].get("min_found_score") for t in TRIGGERS if t != "license_audit")),
+        ("found floor downgrades a weak verdict, evidence preserved in details",
+         (lambda v: (_apply_verdict_guards("license_audit", v) or True)
+          and not v["found"] and v["score"] == 0 and v["headline"] == ""
+          and v["details"]["below_found_bar"] == {"score": 40, "headline": "Weak proxy"}
+          and v["summary"].startswith("[scored 40, below the 55-point found bar]")
+          and v["summary"].endswith("tail-evidence"))
+         ({"found": True, "score": 40, "headline": "Weak proxy", "date": "",
+           "summary": ("x" * 40 + " tail-evidence"), "details": {}})),
+        ("recency window downgrades a stale ma_carveout date, keeps a current one",
+         (lambda old, new: (_apply_verdict_guards("ma_carveout", old) or True)
+          and (_apply_verdict_guards("ma_carveout", new) or True)
+          and not old["found"] and "outside_window" in old["details"]
+          and new["found"] and new["score"] == 80)
+         ({"found": True, "score": 80, "headline": "Old deal", "date": "2024-01",
+           "summary": "s", "details": {}},
+          {"found": True, "score": 80, "headline": "Fresh deal",
+           "date": _utcnow().strftime("%Y-%m"), "summary": "s", "details": {}})),
+        ("ebs_performance found score clamps to the 75 cap",
+         (lambda v: (_apply_verdict_guards("ebs_performance", v) or True)
+          and v["found"] and v["score"] == 75)
+         ({"found": True, "score": 92, "headline": "h", "date": "",
+           "summary": "s", "details": {}})),
+        ("found sort breaks score ties in canonical trigger order everywhere",
+         [t for t, _ in _found_sorted({
+             "ebs_oci": {"found": True, "score": 70},
+             "ma_carveout": {"found": True, "score": 70},
+             "license_audit": {"found": False, "score": 0}})]
+         == ["ma_carveout", "ebs_oci"]),
+        ("NEWS_MAX_SEARCHES: 0 clamps to 1, malformed is ignored, blank is unset",
+         _search_override_probe() == [1, 4, 4]),
     ]
     failed_names = [name for name, passed in checks if not passed]
     for name, passed in checks:
@@ -1018,6 +1303,12 @@ def main():
                       help="research every account_signals domain with no news scan yet")
     mode.add_argument("--self-test", action="store_true", dest="self_test",
                       help="offline config/classifier check (no network, no API key)")
+    mode.add_argument("--refloor", action="store_true",
+                      help="apply the deterministic verdict guards to STORED verdicts "
+                           "(DB-only migration; freshness clocks preserved; see --dry-run)")
+    mode.add_argument("--recompose", action="store_true",
+                      help="synthesize composites for stored found-trigger rows with an "
+                           "empty/stale signal (one API call per row — use --limit)")
     ap.add_argument("--company", help="company name to fill on a blank row (--domain only)")
     ap.add_argument("--triggers", help="comma-scoped trigger ids (default: all / NEWS_TRIGGERS)")
     ap.add_argument("--force", action="store_true", help="re-research even if fresh")
@@ -1026,10 +1317,22 @@ def main():
                     help="with --missing: also re-research scans older than N days")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--workers", type=int, default=2)
+    ap.add_argument("--dry-run", action="store_true", dest="dry_run",
+                    help="with --refloor: report what would change, write nothing")
     args = ap.parse_args()
 
     if args.self_test:
         sys.exit(self_test())
+    if args.refloor:
+        summary = refloor_stored(limit=args.limit, dry_run=args.dry_run)
+        log(f"refloor done: {summary}")
+        print(json.dumps(summary))
+        return
+    if args.recompose:
+        summary = recompose_stored(limit=args.limit, force=args.force)
+        log(f"recompose done: {summary}")
+        print(json.dumps(summary))
+        return
 
     triggers = [t.strip() for t in args.triggers.split(",") if t.strip()] if args.triggers else None
     hubspot = False if args.no_hubspot else None
