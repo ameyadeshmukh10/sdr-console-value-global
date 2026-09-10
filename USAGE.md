@@ -261,6 +261,9 @@ python3 $P/news_signals.py --domain acme.com             # research one company 
 python3 $P/news_signals.py --missing --limit 20          # backfill accounts with no research yet ($ per scan!)
 python3 $P/news_signals.py --domain acme.com --triggers ma_carveout,erp_migration   # scope the triggers
 python3 $P/news_signals.py --self-test                   # offline check (no network, no key needed)
+python3 $P/news_signals.py --refloor --dry-run           # preview guard corrections to stored verdicts
+python3 $P/news_signals.py --refloor                     # apply them (DB-only; freshness clocks preserved)
+python3 $P/news_signals.py --recompose --limit 50        # composites for stored found rows ($ per row)
 ```
 
 A full scan is up to 5 web-search calls (~1-3 minutes, real API spend) — prefer
