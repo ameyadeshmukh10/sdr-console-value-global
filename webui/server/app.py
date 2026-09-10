@@ -3777,8 +3777,11 @@ def start_news_backfill(limit=None, stale_days=None, force=False):
 
     def _run():
         try:
+            # batched=True: this is THE deliberate bulk path — the intel job
+            # and the post-batch tail stay synchronous (interactive latency).
             summary = N.backfill(stale_days=stale_days, limit=limit, force=force,
-                                 workers=2, progress=_progress, phase=_phase)
+                                 workers=2, progress=_progress, phase=_phase,
+                                 batched=True)
             job.update(summary)  # total/detected/skipped/errors/hubspot_ok/hubspot_missing
             job["status"] = "done"
         except Exception as e:  # noqa: BLE001

@@ -85,10 +85,11 @@ backfill.
 import argparse
 import json
 import os
+import re
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -738,6 +739,54 @@ def _blank_verdict(trigger_id, model=None):
     return out
 
 
+def _skip_reason(tid, ebs):
+    """The ebs_performance pre-condition — ONE implementation for the sync and
+    batch paths (the stored/rendered skip strings must never drift apart)."""
+    if tid != "ebs_performance":
+        return None
+    if ebs is None:
+        return "tech scan has not run (Oracle EBS pre-condition unknown)"
+    if not ebs:
+        return "Oracle EBS not detected by the tech scan"
+    return None
+
+
+def _scan_models(results):
+    """The model(s) that actually researched this scan, derived from the
+    per-verdict records — never guessed from the default client (which is
+    wrong the moment per-trigger models are in play, and constructing it just
+    to read .model would cache an unused client)."""
+    models = sorted({r.get("model") for r in results.values()
+                     if isinstance(r, dict) and "skipped" not in r and r.get("model")})
+    if not models:
+        return None
+    return models[0] if len(models) == 1 else ", ".join(models)
+
+
+def _assemble_scan(results, duration_ms=None, batched=False):
+    """The canonical per-domain scan result built from classified verdicts —
+    ONE definition of "what a completed scan looks like", shared by
+    detect_domain (sync) and the batched backfill. `error` is set — and
+    formatted None — ONLY when every researched trigger errored (a partial
+    scan is a definitive answer)."""
+    results = {tid: results[tid] for tid in TRIGGERS if tid in results}
+    researched = [r for r in results.values() if "skipped" not in r]
+    errors = [r for r in researched if r.get("error")]
+    error = None
+    formatted = format_line(results)
+    if researched and len(errors) == len(researched):
+        error = "; ".join(f"{r.get('label') or '?'}: {r['error']}" for r in errors)[:500]
+        formatted = None
+    out = {"formatted": formatted, "triggers": results, "error": error,
+           "found_count": sum(1 for r in results.values()
+                              if isinstance(r, dict) and r.get("found")),
+           "web_searches": sum(r.get("web_searches", 0) for r in researched),
+           "duration_ms": duration_ms, "model": _scan_models(results)}
+    if batched:
+        out["batched"] = True
+    return out
+
+
 def _research_trigger(trigger_id, company, domain, max_searches, tech_line=None, prior=None):
     """One trigger = one Messages call with web search. Returns the classified
     verdict plus call metadata; on failure a verdict-shaped dict with `error`
@@ -785,21 +834,12 @@ def detect_domain(domain, company=None, triggers=None, tech_line=None, ebs=None)
     t0 = time.monotonic()
     results = {}
 
-    def _skip(tid):
-        if tid != "ebs_performance":
-            return None
-        if ebs is None:
-            return "tech scan has not run (Oracle EBS pre-condition unknown)"
-        if not ebs:
-            return "Oracle EBS not detected by the tech scan"
-        return None
-
     for wave in TRIGGER_WAVES:
         runnable = []
         for tid in wave:
             if tid not in wanted:
                 continue
-            reason = _skip(tid)
+            reason = _skip_reason(tid, ebs)
             if reason:
                 results[tid] = {"label": TRIGGERS[tid]["label"], "skipped": reason}
             else:
@@ -816,25 +856,7 @@ def detect_domain(domain, company=None, triggers=None, tech_line=None, ebs=None)
             for tid, fut in futures.items():
                 results[tid] = fut.result()
 
-    # re-key in canonical order so detail JSON (and the drawer) reads stably
-    results = {tid: results[tid] for tid in TRIGGERS if tid in results}
-    researched = [r for r in results.values() if "skipped" not in r]
-    errors = [r for r in researched if r.get("error")]
-    error = None
-    formatted = format_line(results)
-    if researched and len(errors) == len(researched):
-        error = "; ".join(f"{r['label']}: {r['error']}" for r in errors)[:500]
-        formatted = None
-
-    model = None
-    try:
-        model = _client().model if _CLIENTS else None
-    except Exception:  # noqa: BLE001
-        pass
-    return {"formatted": formatted, "triggers": results, "error": error,
-            "found_count": sum(1 for r in results.values() if r.get("found")),
-            "web_searches": sum(r.get("web_searches", 0) for r in researched),
-            "duration_ms": int((time.monotonic() - t0) * 1000), "model": model}
+    return _assemble_scan(results, duration_ms=int((time.monotonic() - t0) * 1000))
 
 
 # ---- store + orchestrate -----------------------------------------------------
@@ -1019,11 +1041,47 @@ def hubspot_writeback(domain, trigger_results):
 
 
 # ---- batched research (Message Batches API — 50% token cost) -----------------
-# Bulk backfills run through /v1/messages/batches by default (NEWS_BATCH=0
-# forces the old synchronous thread pool): tokens bill at half price, web-search
-# fees are unchanged. The two-wave cross-reference design maps to two
-# sequential batches; results usually land well under an hour. The drawer's
-# single-account "Research news" stays synchronous (detect_and_store).
+# The deliberate bulk paths (UI bulk "Research news" button, CLI --missing)
+# OPT IN via backfill(batched=True): tokens bill at half price, web-search fees
+# are unchanged. Interactive/fire-and-forget callers (the intel job, the
+# post-batch tail, the drawer) stay synchronous — batch latency is usually
+# under an hour but only guaranteed within 24h. Durability: every submitted
+# batch id is persisted to data/outreach/news_batches.json BEFORE polling
+# (results stay fetchable for 29 days — a redeploy mid-poll must never lose
+# the only copy of a billed batch's id), poll errors retry until the deadline,
+# and a failed/timed-out wave degrades to per-row error verdicts (stored and
+# retried next run) instead of discarding the other wave's paid results.
+_LEDGER_LOCK = threading.Lock()
+
+
+def _batch_ledger_path():
+    return db.PROJECT_ROOT / "data" / "outreach" / "news_batches.json"
+
+
+def _record_batch(bid, label, status, extra=None):
+    """Best-effort durable ledger of submitted news batches. Never raises —
+    the ledger must never fail a run."""
+    if not bid:
+        return
+    try:
+        with _LEDGER_LOCK:
+            path = _batch_ledger_path()
+            try:
+                data = json.loads(path.read_text()) if path.is_file() else {}
+            except (ValueError, OSError):
+                data = {}
+            entry = data.get(bid) or {"batch_id": bid, "created_at": db.now()}
+            entry.update({"label": label, "status": status, "updated_at": db.now()})
+            entry.update(extra or {})
+            data[bid] = entry
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, indent=1))
+            tmp.replace(path)
+    except Exception as exc:  # noqa: BLE001
+        log(f"batch ledger write failed: {exc}")
+
+
 def _batch_verdict_from_result(tid, result, model):
     """One batch result line → the same verdict shape _research_trigger emits."""
     out = _blank_verdict(tid, model=model)
@@ -1042,22 +1100,49 @@ def _batch_verdict_from_result(tid, result, model):
     return out
 
 
+def _wave_error_verdicts(idx_map, msg):
+    """Every request of a wave as an error verdict — stored per row, so the
+    scan records the failure and retries next run instead of vanishing."""
+    out = {}
+    for cid, (tid, _plan, model) in idx_map.items():
+        v = _blank_verdict(tid, model=model)
+        v["error"] = msg[:300]
+        out[cid] = v
+    return out
+
+
 def _run_batch_wave(reqs, idx_map, phase, label):
     """Submit one wave's requests, poll to completion, and classify every line.
     Returns {custom_id: verdict}; a request the results file never mentions
-    gets an errored verdict (never silently dropped)."""
+    gets an errored verdict (never silently dropped). NEVER raises after the
+    submit: the batch id is persisted to the ledger first, poll errors retry
+    until the deadline (a billed batch must not be abandoned over a hiccup),
+    and a timeout best-effort-cancels and degrades to error verdicts."""
     client = _client()
     batch = client.create_batch(reqs)
     bid = batch.get("id") or ""
+    _record_batch(bid, label, "submitted", {"requests": len(reqs)})
     log(f"{label}: batch {bid} submitted ({len(reqs)} requests)")
     poll = max(5, _env_int("NEWS_BATCH_POLL_S", 20))
-    deadline = time.monotonic() + max(300, _env_int("NEWS_BATCH_TIMEOUT_S", 14400))
+    # Default matches the API's own guarantee (results within 24h).
+    deadline = time.monotonic() + max(300, _env_int("NEWS_BATCH_TIMEOUT_S", 86400))
     while batch.get("processing_status") != "ended":
         if time.monotonic() > deadline:
-            raise RuntimeError(f"{label}: batch {bid} timed out "
-                               f"(NEWS_BATCH_TIMEOUT_S) — cancel or retry later")
+            try:
+                client.cancel_batch(bid)
+                _record_batch(bid, label, "cancel_requested")
+            except Exception as exc:  # noqa: BLE001
+                log(f"{label}: cancel of batch {bid} failed: {exc}")
+                _record_batch(bid, label, "timed_out")
+            return _wave_error_verdicts(
+                idx_map, f"{label}: batch {bid} timed out (NEWS_BATCH_TIMEOUT_S) — id "
+                         "persisted in data/outreach/news_batches.json")
         time.sleep(poll)
-        batch = client.get_batch(bid)
+        try:
+            batch = client.get_batch(bid)
+        except Exception as exc:  # noqa: BLE001 — a poll hiccup must never abandon a billed batch
+            log(f"{label}: poll of batch {bid} failed ({exc}) — retrying")
+            continue
         counts = batch.get("request_counts") or {}
         finished = sum(counts.get(k, 0) for k in ("succeeded", "errored", "canceled", "expired"))
         if phase:
@@ -1065,17 +1150,31 @@ def _run_batch_wave(reqs, idx_map, phase, label):
                 phase(f"{label}: {finished}/{len(reqs)} requests done (batch {bid})")
             except Exception:  # noqa: BLE001 — phase is cosmetic
                 pass
+    results_url = batch.get("results_url")
+    if not results_url:
+        _record_batch(bid, label, "ended_without_results_url")
+        return _wave_error_verdicts(idx_map, f"{label}: batch {bid} ended without a results_url")
+    _record_batch(bid, label, "ended")
     verdicts = {}
-    for line in client.get_batch_results(batch["results_url"]):
-        cid = line.get("custom_id") or ""
-        if cid in idx_map:
-            tid, _plan, model = idx_map[cid]
-            verdicts[cid] = _batch_verdict_from_result(tid, line.get("result"), model)
+    try:
+        for line in client.get_batch_results(results_url):
+            cid = line.get("custom_id") or ""
+            if cid in idx_map:
+                tid, _plan, model = idx_map[cid]
+                verdicts[cid] = _batch_verdict_from_result(tid, line.get("result"), model)
+    except Exception as exc:  # noqa: BLE001 — results stay fetchable for 29 days; degrade
+        log(f"{label}: fetching results of batch {bid} failed: {exc}")
+        _record_batch(bid, label, "results_fetch_failed", {"error": str(exc)[:300]})
+        for cid, missing in _wave_error_verdicts(
+                idx_map, f"batch {bid}: results fetch failed: {exc}").items():
+            verdicts.setdefault(cid, missing)
+        return verdicts
     for cid, (tid, _plan, model) in idx_map.items():
         if cid not in verdicts:
             v = _blank_verdict(tid, model=model)
             v["error"] = f"batch {bid}: no result line returned"
             verdicts[cid] = v
+    _record_batch(bid, label, "collected")
     return verdicts
 
 
@@ -1106,13 +1205,18 @@ def _backfill_batched(items, workers, force, hubspot, progress, phase, triggers)
             except Exception:  # noqa: BLE001 — progress is cosmetic
                 pass
 
-    # Plan pass: same freshness skip as detect_and_store, plus the row context
-    # (tech line, hiring line, EBS pre-condition) every later step needs.
+    # Plan pass: same normalization + freshness skip as detect_and_store, plus
+    # the row context (tech line, EBS pre-condition) every later step needs,
+    # and the news_checked_at snapshot the finalize freshness re-check uses.
     refresh_days = _env_float("NEWS_REFRESH_DAYS", 30)
     plans = []
     conn = _db()
     try:
-        for idx, (d, c) in enumerate(items):
+        for idx, (raw, c) in enumerate(items):
+            d = _clean_domain(raw)
+            if not d:
+                _tick(str(raw), {"error_exc": f"invalid domain: {raw!r}"})
+                continue
             row = db.get_signal(conn, d)
             if (row and not force and row.get("news_signals") is not None
                     and db.news_fresh(row, days=refresh_days)):
@@ -1120,37 +1224,38 @@ def _backfill_batched(items, workers, force, hubspot, progress, phase, triggers)
                 continue
             plans.append({"idx": idx, "domain": d,
                           "company": c or (row or {}).get("company_name"),
-                          "row": row, "tech_line": (row or {}).get("tech_signals"),
+                          "news_checked_at": (row or {}).get("news_checked_at"),
+                          "tech_line": (row or {}).get("tech_signals"),
                           "ebs": _ebs_detected(row), "results": {}})
     finally:
         conn.close()
     if not plans:
         return summary
 
-    def _skip_reason(tid, plan):
-        if tid != "ebs_performance":
-            return None
-        if plan["ebs"] is None:
-            return "tech scan has not run (Oracle EBS pre-condition unknown)"
-        if not plan["ebs"]:
-            return "Oracle EBS not detected by the tech scan"
-        return None
-
+    # Per-trigger client/budget/system resolved ONCE per wave, not per plan —
+    # 1,262 plans × 3 triggers would otherwise take the client lock and
+    # re-format the system prompt ~3,800 times for identical values.
     for wave_no, wave in enumerate(TRIGGER_WAVES, start=1):
+        per_trigger = {}
+        for tid in wave:
+            if tid in wanted:
+                ms = _max_searches(tid)
+                per_trigger[tid] = (_client(_trigger_model(tid)), ms, build_system(ms))
         reqs, idx_map = [], {}
         for plan in plans:
             for tid in wave:
                 if tid not in wanted:
                     continue
-                reason = _skip_reason(tid, plan)
+                reason = _skip_reason(tid, plan["ebs"])
                 if reason:
                     plan["results"][tid] = {"label": TRIGGERS[tid]["label"], "skipped": reason}
                     continue
-                ms = _max_searches(tid)
-                client = _client(_trigger_model(tid))
-                cid = f"{tid}:{plan['idx']}"  # custom_id caps at 64 chars — never the domain
+                client, ms, system = per_trigger[tid]
+                # custom_id: the API allows only [A-Za-z0-9_-]{1,64} — never a
+                # domain (dots), never a colon.
+                cid = f"{tid}_{plan['idx']}"
                 reqs.append({"custom_id": cid, "params": client.build_body(
-                    build_system(ms),
+                    system,
                     build_user(tid, plan["company"], plan["domain"], ms,
                                tech_line=plan["tech_line"],
                                prior=plan["results"].get(TRIGGERS[tid].get("context_from"))),
@@ -1159,40 +1264,43 @@ def _backfill_batched(items, workers, force, hubspot, progress, phase, triggers)
                 idx_map[cid] = (tid, plan, client.model)
         if not reqs:
             continue
-        verdicts = _run_batch_wave(reqs, idx_map, phase, f"wave {wave_no}")
+        try:
+            verdicts = _run_batch_wave(reqs, idx_map, phase, f"wave {wave_no}")
+        except Exception as exc:  # noqa: BLE001 — a wave-2 submit failure must
+            # never discard wave 1's paid results: degrade to error verdicts
+            # (stored per row, retried next run) and carry on to the finalize.
+            log(f"wave {wave_no}: submit failed: {exc}")
+            verdicts = _wave_error_verdicts(idx_map, f"wave {wave_no} submit failed: {exc}")
         for cid, verdict in verdicts.items():
             tid, plan, _model = idx_map[cid]
             plan["results"][tid] = verdict
 
-    # Assemble each domain's detect_domain-shaped result, then store — the
-    # write-back/composite finalize is network-bound, so a small thread pool.
-    default_model = None
-    try:
-        default_model = _client().model
-    except Exception:  # noqa: BLE001
-        pass
-
+    # Finalize per domain (freshness re-check → assemble → store). This step is
+    # network-bound cleanup (HubSpot write-back + composite), NOT research
+    # spend, so it gets its own pool: NEWS_FINALIZE_WORKERS (default 4 — at 2,
+    # a 1,262-domain run trailed the finished batch by ~an hour).
     def _finalize(plan):
-        results = {tid: plan["results"][tid] for tid in TRIGGERS if tid in plan["results"]}
-        researched = [r for r in results.values() if "skipped" not in r]
-        errors = [r for r in researched if r.get("error")]
-        error = None
-        formatted = format_line(results)
-        if researched and len(errors) == len(researched):
-            error = "; ".join(f"{r['label']}: {r['error']}" for r in errors)[:500]
-            formatted = None
-        res = {"formatted": formatted, "triggers": results, "error": error,
-               "found_count": sum(1 for r in results.values() if r.get("found")),
-               "web_searches": sum(r.get("web_searches", 0) for r in researched),
-               "duration_ms": None, "model": default_model, "batched": True}
         try:
-            return plan["domain"], _store_scan(plan["domain"], plan["company"],
-                                               plan["row"], res, hubspot)
+            conn = _db()
+            try:
+                current = db.get_signal(conn, plan["domain"])
+            finally:
+                conn.close()
+            if ((current or {}).get("news_checked_at") or None) != plan["news_checked_at"]:
+                # A newer scan landed while the batch ran (drawer click,
+                # another job) — never overwrite it with these older verdicts,
+                # and never bump its freshness clock.
+                return plan["domain"], {"domain": plan["domain"], "skipped": True,
+                                        "reason": "newer scan landed mid-batch"}
+            res = _assemble_scan(plan["results"], batched=True)
+            return plan["domain"], _store_scan(plan["domain"], plan["company"], res, hubspot)
         except Exception as exc:  # noqa: BLE001 — one bad domain never kills the run
             return plan["domain"], {"domain": plan["domain"], "error_exc": str(exc)[:300]}
 
-    with ThreadPoolExecutor(max_workers=max(1, int(workers))) as ex:
-        for d, res in ex.map(_finalize, plans):
+    fin_workers = max(1, _env_int("NEWS_FINALIZE_WORKERS", 0) or max(int(workers), 4))
+    with ThreadPoolExecutor(max_workers=fin_workers) as ex:
+        for fut in as_completed([ex.submit(_finalize, p) for p in plans]):
+            d, res = fut.result()
             _tick(d, res)
     return summary
 
@@ -1200,15 +1308,20 @@ def _backfill_batched(items, workers, force, hubspot, progress, phase, triggers)
 # ---- bulk ---------------------------------------------------------------------
 def backfill(domains=None, stale_days=None, limit=None, workers=2, force=False,
              hubspot=None, progress=None, triggers=None, batched=None, phase=None):
-    """Research many domains. Default path: the Message Batches API (50% token
-    cost; NEWS_BATCH=0 or batched=False forces the synchronous thread pool,
-    which also handles runs smaller than NEWS_BATCH_MIN, default 3). Sync mode:
-    ThreadPoolExecutor — keep workers small, each scan already fans out to up
-    to 3 concurrent web-search calls, and every non-skipped scan is real API
-    spend. domains=None pulls the never-scanned (plus stale, when stale_days is
-    set) from account_signals. `phase` (optional) receives coarse batch-progress
-    strings. Returns {total, detected, skipped, errors, hubspot_ok,
-    hubspot_missing, batched?}."""
+    """Research many domains. batched=True OPTS IN to the Message Batches API
+    (50% token cost; hour-scale latency, guaranteed within 24h) — the UI bulk
+    button and CLI --missing pass it; batched=None/False runs the synchronous
+    thread pool, which also handles opt-in runs smaller than NEWS_BATCH_MIN
+    (default 3) and NEWS_BATCH=0 (the global kill switch). Batch-by-default
+    was reverted deliberately: the intel job sits on the interactive segment
+    gate and the post-batch tail is fire-and-forget — hour-scale latency is
+    wrong for both. Sync mode: keep workers small, each scan already fans out
+    to up to 3 concurrent web-search calls and every non-skipped scan is real
+    API spend (in batch mode `workers` only sizes nothing — the finalize pool
+    is NEWS_FINALIZE_WORKERS). domains=None pulls the never-scanned (plus
+    stale, when stale_days is set) from account_signals. `phase` (optional)
+    receives coarse batch-progress strings. Returns {total, detected, skipped,
+    errors, hubspot_ok, hubspot_missing, batched?}."""
     ok, reason = news_available()
     if not ok:
         raise RuntimeError(f"news research unavailable: {reason}")
@@ -1230,8 +1343,8 @@ def backfill(domains=None, stale_days=None, limit=None, workers=2, force=False,
     if not items:
         return summary
 
-    use_batch = _flag("NEWS_BATCH", True) if batched is None else bool(batched)
-    if use_batch and len(items) >= max(1, _env_int("NEWS_BATCH_MIN", 3)):
+    if (batched and _flag("NEWS_BATCH", True)
+            and len(items) >= max(1, _env_int("NEWS_BATCH_MIN", 3))):
         return _backfill_batched(items, workers, force, hubspot, progress, phase, triggers)
 
     def work(item):
@@ -1436,8 +1549,15 @@ def self_test():
             prompt_errors.append(f"{tid}: {exc}")
 
     # Per-trigger model + search-cap resolution (env saved/restored)
-    saved = {k: os.environ.get(k) for k in ("NEWS_MODEL_MA_CARVEOUT", "NEWS_MAX_SEARCHES")}
+    # Save/clear EVERY env knob the assertions read — an operator's ambient
+    # .env value (any NEWS_MODEL_<TID>, NEWS_MAX_SEARCHES) must never fail —
+    # or be destroyed by — the offline gate.
+    saved = {k: os.environ.get(k) for k in
+             ["NEWS_MAX_SEARCHES", "NEWS_MODEL"]
+             + [f"NEWS_MODEL_{t.upper()}" for t in TRIGGERS]}
     try:
+        for k in saved:
+            os.environ.pop(k, None)
         os.environ["NEWS_MODEL_MA_CARVEOUT"] = "claude-haiku-4-5"
         tm_env = _trigger_model("ma_carveout")
         tm_default = _trigger_model("erp_migration")
@@ -1539,6 +1659,9 @@ def self_test():
          and "below the 55-point found bar" in bv_floor["summary"]),
         ("errored batch line yields an error verdict, never found",
          not bv_err["found"] and (bv_err["error"] or "").startswith("batch errored")),
+        ("batch custom_ids satisfy the API charset ^[A-Za-z0-9_-]{1,64}$",
+         all(re.fullmatch(r"[A-Za-z0-9_-]{1,64}", f"{tid}_{i}")
+             for i, tid in enumerate(TRIGGERS, start=1200))),
         ("found floor downgrades a weak verdict, evidence preserved in details",
          (lambda v: (_apply_verdict_guards("license_audit", v) or True)
           and not v["found"] and v["score"] == 0 and v["headline"] == ""
@@ -1642,7 +1765,7 @@ def main():
 
     summary = backfill(stale_days=args.stale_days, limit=args.limit, workers=args.workers,
                        force=args.force, hubspot=hubspot, progress=progress,
-                       triggers=triggers, batched=False if args.sync else None,
+                       triggers=triggers, batched=not args.sync,
                        phase=lambda msg: log(msg))
     log(f"done: {summary}")
     print(json.dumps(summary))

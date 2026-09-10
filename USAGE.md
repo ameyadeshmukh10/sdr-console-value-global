@@ -267,9 +267,12 @@ python3 $P/news_signals.py --refloor                     # apply them (DB-only; 
 python3 $P/news_signals.py --recompose --limit 50        # composites for stored found rows ($ per row)
 ```
 
-Bulk backfills (`--missing`, the UI bulk button, the intel job) run through the
-**Message Batches API** by default — 50% token cost, results usually within the hour
-(`NEWS_BATCH=0` disables). A full scan is 3-4 web-search calls per trigger (per-trigger
+The deliberate bulk paths (`--missing` and the UI bulk button — NOT the intel job or
+the post-batch tail, which stay synchronous for latency) run through the
+**Message Batches API** — 50% token cost, results usually within the hour, guaranteed
+in 24h (`--sync` or `NEWS_BATCH=0` forces synchronous). Submitted batch ids persist in
+`data/outreach/news_batches.json` so a redeploy mid-poll never orphans a billed batch.
+A full scan is 3-4 web-search calls per trigger (per-trigger
 caps tuned from live data; `NEWS_MAX_SEARCHES` overrides) — prefer `--limit` on a
 first bulk backfill, or scope with `--triggers` / `NEWS_TRIGGERS`. The model comes
 from `NEWS_MODEL` (set to `claude-sonnet-5` in prod — unset it falls through to the

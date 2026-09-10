@@ -148,8 +148,16 @@ class AnthropicClient:
 
     # ---- Message Batches API ----------------------------------------------
     def create_batch(self, requests):
-        """Submit a batch. requests = [{"custom_id","params"}]. Returns the batch obj."""
-        return self._post({"requests": requests}, timeout=120, url=BATCH_URL)
+        """Submit a batch. requests = [{"custom_id","params"}]. Returns the batch obj.
+
+        ambiguous_retry=False: batch creation is NOT idempotent and has no
+        idempotency key — a network error after the request was sent may mean
+        the batch WAS created (a blind retry would submit a duplicate batch
+        and double the spend). Only explicit rejections (429/529) retry; on an
+        ambiguous failure the caller must reconcile via the batches list /
+        console before resubmitting."""
+        return self._post({"requests": requests}, timeout=120, url=BATCH_URL,
+                          ambiguous_retry=False)
 
     def get_batch(self, batch_id):
         return self._get(f"{BATCH_URL}/{batch_id}", timeout=60)
@@ -158,14 +166,22 @@ class AnthropicClient:
         return self._post({}, timeout=60, url=f"{BATCH_URL}/{batch_id}/cancel")
 
     def get_batch_results(self, results_url):
-        """Yield {custom_id, result} for each line of the .jsonl results file."""
-        raw = self._get(results_url, timeout=300, raw=True)
-        for line in raw.splitlines():
-            line = line.strip()
-            if line:
+        """Yield {custom_id, result} per line of the results .jsonl, STREAMED
+        off the response — a large run's results can be hundreds of MB, and
+        materializing them as one str (plus a splitlines copy) inside the web
+        server process risks an OOM at the exact moment the results finally
+        arrive. Errors surface to the caller (results stay fetchable for 29
+        days — callers degrade and re-fetch rather than retry-download here)."""
+        req = urllib.request.Request(results_url, method="GET")
+        self._headers(req)
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            for raw_line in resp:
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
                 try:
-                    yield json.loads(line)
-                except json.JSONDecodeError:
+                    yield json.loads(raw_line.decode("utf-8"))
+                except (json.JSONDecodeError, UnicodeDecodeError):
                     continue
 
     def _headers(self, req):
@@ -188,16 +204,21 @@ class AnthropicClient:
                     last_err = AnthropicError(f"HTTP {e.code}: {detail}")
                     continue
                 raise AnthropicError(f"HTTP {e.code}: {detail}") from e
-            except urllib.error.URLError as e:
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
+                reason = getattr(e, "reason", e)
                 if attempt < 4:
                     time.sleep(min(2 ** attempt, 20))
-                    last_err = AnthropicError(f"Network error: {e.reason}")
+                    last_err = AnthropicError(f"Network error: {reason}")
                     continue
-                raise AnthropicError(f"Network error: {e.reason}") from e
+                raise AnthropicError(f"Network error: {reason}") from e
         if last_err:
             raise last_err
 
-    def _post(self, body, timeout, url=API_URL, extra_headers=None):
+    def _post(self, body, timeout, url=API_URL, extra_headers=None, ambiguous_retry=True):
+        """ambiguous_retry=False restricts retries to explicit rejections
+        (429/529) for non-idempotent endpoints (batch creation): a 5xx,
+        network error, or timeout is AMBIGUOUS — the server may have accepted
+        the request — so retrying could execute it twice."""
         data = json.dumps(body).encode("utf-8")
         req = urllib.request.Request(url, data=data, method="POST")
         req.add_header("x-api-key", self.api_key)
@@ -215,17 +236,27 @@ class AnthropicClient:
             except urllib.error.HTTPError as e:
                 detail = e.read().decode("utf-8", "replace")[:400]
                 # 429 rate limit, 529 overloaded, 5xx transient -> backoff + retry
-                if e.code in (429, 500, 502, 503, 504, 529) and attempt < 4:
+                # (ambiguous_retry=False: only the explicit rejections retry)
+                retryable = (429, 529) if not ambiguous_retry else (429, 500, 502, 503, 504, 529)
+                if e.code in retryable and attempt < 4:
                     time.sleep(min(2 ** attempt, 20))
                     last_err = AnthropicError(f"HTTP {e.code}: {detail}")
                     continue
                 raise AnthropicError(f"HTTP {e.code}: {detail}") from e
-            except urllib.error.URLError as e:
+            # TimeoutError/OSError cover read-phase timeouts and resets that
+            # urllib does NOT wrap in URLError (they used to escape uncaught).
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
+                reason = getattr(e, "reason", e)
+                if not ambiguous_retry:
+                    raise AnthropicError(
+                        f"Network error after the request may have been sent: {reason} — "
+                        "NOT retried (a retry could duplicate a non-idempotent request); "
+                        "reconcile server-side before resubmitting") from e
                 if attempt < 4:
                     time.sleep(min(2 ** attempt, 20))
-                    last_err = AnthropicError(f"Network error: {e.reason}")
+                    last_err = AnthropicError(f"Network error: {reason}")
                     continue
-                raise AnthropicError(f"Network error: {e.reason}") from e
+                raise AnthropicError(f"Network error: {reason}") from e
         if last_err:
             raise last_err
 

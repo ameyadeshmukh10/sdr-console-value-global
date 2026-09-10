@@ -7,6 +7,7 @@ data/outreach/source-jobs/
 # SLA rules + pull history (runtime state on the volume)
 data/outreach/slas.json
 data/outreach/pull_history.json
+data/outreach/news_batches.json
 # CSV audience uploads (registry + the raw uploaded files; runtime state on the volume)
 data/outreach/csv_audiences.json
 data/outreach/csv-uploads/
