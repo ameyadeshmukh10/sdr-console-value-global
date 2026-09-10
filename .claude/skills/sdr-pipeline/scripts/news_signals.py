@@ -518,7 +518,8 @@ def compose_signal(company, domain, trigger_results, tech_line=None, hiring_line
     """Synthesize the composite signal. Returns (text, error) — never raises;
     (None, <error>) on failure so a bad call never kills the scan."""
     try:
-        res = _client().complete(
+        model = (os.environ.get("NEWS_COMPOSITE_MODEL") or "").strip() or None
+        res = _client(model).complete(
             COMPOSITE_SYSTEM.format(today=datetime.now().strftime("%B %d, %Y")),
             build_composite_user(company, domain, trigger_results,
                                  tech_line=tech_line, hiring_line=hiring_line),
@@ -550,20 +551,81 @@ def _ebs_detected(row):
 
 
 # ---- research ---------------------------------------------------------------
-_CLIENT = None
+_CLIENTS = {}
 _CLIENT_LOCK = threading.Lock()
 
 
-def _client():
-    """Lazy shared AnthropicClient (NEWS_MODEL wins over CLAUDE_MODEL)."""
-    global _CLIENT
+def _client(model=None):
+    """Lazy per-model AnthropicClient cache. model=None resolves NEWS_MODEL →
+    CLAUDE_MODEL → the client default; a per-trigger model (see _trigger_model)
+    gets its own cached instance so one scan can mix model tiers."""
+    key = (model or "").strip() or (os.environ.get("NEWS_MODEL") or "").strip() or None
     with _CLIENT_LOCK:
-        if _CLIENT is None:
+        if key not in _CLIENTS:
             if str(AI_SDR_SCRIPTS) not in sys.path:
                 sys.path.insert(0, str(AI_SDR_SCRIPTS))
             from anthropic_client import AnthropicClient  # noqa: E402 — lazy: needs API key
-            _CLIENT = AnthropicClient(model=(os.environ.get("NEWS_MODEL") or "").strip() or None)
-        return _CLIENT
+            _CLIENTS[key] = AnthropicClient(model=key)
+        return _CLIENTS[key]
+
+
+def _trigger_model(trigger_id):
+    """Model for one trigger's research call: NEWS_MODEL_<TRIGGER_ID> env (e.g.
+    NEWS_MODEL_LICENSE_AUDIT=claude-haiku-4-5 — set per trigger to test cheaper
+    tiers, no code change) → TRIGGERS[..]["model"] → None (the _client default
+    chain, NEWS_MODEL → CLAUDE_MODEL)."""
+    return ((os.environ.get(f"NEWS_MODEL_{trigger_id.upper()}") or "").strip()
+            or TRIGGERS[trigger_id].get("model") or None)
+
+
+def _max_searches(tid):
+    """Per-trigger web-search budget: NEWS_MAX_SEARCHES (when set) overrides
+    everything, then TRIGGERS[..]["max_searches"], then 4. Caps tuned from the
+    2026-09 live run (1,262 accounts): found verdicts needed a 4th search only
+    on erp_migration (median 4); ma_carveout found at median 2, ebs_oci ≤3."""
+    return max(1, _env_int("NEWS_MAX_SEARCHES", 0) or TRIGGERS[tid].get("max_searches") or 4)
+
+
+def _usage_compact(usage):
+    """The billing-relevant integers from a Messages usage object."""
+    keep = ("input_tokens", "output_tokens", "cache_read_input_tokens",
+            "cache_creation_input_tokens")
+    return {k: usage[k] for k in keep if isinstance((usage or {}).get(k), int)}
+
+
+def _finish_verdict(trigger_id, out, res):
+    """Classify one completed Messages response (sync or batch result) into the
+    verdict dict `out` in place: search/usage metadata, JSON verdict, and the
+    deterministic min_found_score backstop. Raises on unparseable output —
+    callers wrap."""
+    out["web_searches"] = res.get("web_search_count", 0)
+    usage = _usage_compact(res.get("usage"))
+    if usage:
+        out["usage"] = usage
+    out.update(classify_verdict(extract_json_lazy(res["text"])))
+    floor = TRIGGERS[trigger_id].get("min_found_score")
+    if floor and out["found"] and out["score"] < floor:
+        # The model ignored the found bar — downgrade deterministically so a
+        # weak verdict can never seed a segment.
+        out["summary"] = _truncate(
+            f"[below the {floor}-point found bar: {out['headline']}] {out['summary']}", 800)
+        out["found"], out["score"], out["headline"] = False, 0, ""
+
+
+def extract_json_lazy(text):
+    if str(AI_SDR_SCRIPTS) not in sys.path:
+        sys.path.insert(0, str(AI_SDR_SCRIPTS))
+    from anthropic_client import extract_json  # noqa: E402
+    return extract_json(text)
+
+
+def _blank_verdict(trigger_id, model=None):
+    out = {"label": TRIGGERS[trigger_id]["label"], "found": False, "score": 0,
+           "headline": "", "summary": "", "date": "", "source_url": "",
+           "details": {}, "error": None, "web_searches": 0, "duration_ms": 0}
+    if model:
+        out["model"] = model
+    return out
 
 
 def _research_trigger(trigger_id, company, domain, max_searches, tech_line=None, prior=None):
@@ -572,28 +634,21 @@ def _research_trigger(trigger_id, company, domain, max_searches, tech_line=None,
     set (never raises)."""
     if str(AI_SDR_SCRIPTS) not in sys.path:
         sys.path.insert(0, str(AI_SDR_SCRIPTS))
-    from anthropic_client import extract_json, AnthropicError, AnthropicJSONError  # noqa: E402
+    from anthropic_client import AnthropicError, AnthropicJSONError  # noqa: E402
     t0 = time.monotonic()
-    out = {"label": TRIGGERS[trigger_id]["label"], "found": False, "score": 0,
-           "headline": "", "summary": "", "date": "", "source_url": "",
-           "details": {}, "error": None, "web_searches": 0, "duration_ms": 0}
+    client = None
+    out = _blank_verdict(trigger_id)
     try:
-        res = _client().complete(
+        client = _client(_trigger_model(trigger_id))
+        out["model"] = client.model
+        res = client.complete(
             build_system(max_searches),
             build_user(trigger_id, company, domain, max_searches,
                        tech_line=tech_line, prior=prior),
             use_web_search=True, max_web_searches=max_searches,
             max_tokens=MAX_TOKENS, timeout=CALL_TIMEOUT,
         )
-        out["web_searches"] = res.get("web_search_count", 0)
-        out.update(classify_verdict(extract_json(res["text"])))
-        floor = TRIGGERS[trigger_id].get("min_found_score")
-        if floor and out["found"] and out["score"] < floor:
-            # The model ignored the found bar — downgrade deterministically so a
-            # weak verdict can never seed a segment.
-            out["summary"] = _truncate(
-                f"[below the {floor}-point found bar: {out['headline']}] {out['summary']}", 800)
-            out["found"], out["score"], out["headline"] = False, 0, ""
+        _finish_verdict(trigger_id, out, res)
     except (AnthropicError, AnthropicJSONError) as exc:
         out["error"] = str(exc)[:300]
     except Exception as exc:  # noqa: BLE001 — one trigger never kills the scan
@@ -615,16 +670,6 @@ def detect_domain(domain, company=None, triggers=None, tech_line=None, ebs=None)
     if not host:
         return {"formatted": None, "triggers": {}, "error": f"invalid domain: {domain!r}",
                 "found_count": 0, "web_searches": 0, "duration_ms": 0, "model": None}
-
-    # Per-trigger search budget: TRIGGERS[..]["max_searches"] wins, then the
-    # global default of 4. NEWS_MAX_SEARCHES (when set) overrides everything —
-    # the explicit-operator escape hatch. Caps are tuned from the 2026-09 live
-    # run (1,262 accounts): found verdicts needed a 4th search only on
-    # erp_migration (median 4); ma_carveout found at median 2, ebs_oci at ≤3.
-    env_max = _env_int("NEWS_MAX_SEARCHES", 0)
-
-    def _max_searches(tid):
-        return max(1, env_max or TRIGGERS[tid].get("max_searches") or 4)
 
     wanted = enabled_triggers(triggers)
     t0 = time.monotonic()
@@ -673,7 +718,7 @@ def detect_domain(domain, company=None, triggers=None, tech_line=None, ebs=None)
 
     model = None
     try:
-        model = _CLIENT.model if _CLIENT else None
+        model = _client().model if _CLIENTS else None
     except Exception:  # noqa: BLE001
         pass
     return {"formatted": formatted, "triggers": results, "error": error,
@@ -739,9 +784,14 @@ def detect_and_store(domain, company=None, force=False, hubspot=None, triggers=N
     res = detect_domain(host, company=company, triggers=triggers,
                         tech_line=(row or {}).get("tech_signals"),
                         ebs=_ebs_detected(row))
+    return _store_scan(host, company, row, res, hubspot)
 
-    # HubSpot write-back BEFORE the upsert (no DB connection held across the
-    # HTTP call) so its outcome persists into news_detail for the drawer.
+
+def _store_scan(host, company, row, res, hubspot):
+    """Persist one completed scan `res` (the detect_domain shape) — HubSpot
+    write-back, composite signal, detail JSON, upserts. Shared by the sync
+    path (detect_and_store) and the batched backfill; network calls happen
+    BEFORE any DB connection is opened."""
     hs = None
     if res["formatted"] is not None:
         enabled = _flag("NEWS_HUBSPOT_WRITEBACK", True) if hubspot is None else bool(hubspot)
@@ -767,6 +817,8 @@ def detect_and_store(domain, company=None, force=False, hubspot=None, triggers=N
         or {t: TRIGGERS[t].get("max_searches") or 4 for t in res["triggers"] if t in TRIGGERS},
         "hubspot": hs,
     }
+    if res.get("batched"):
+        detail["batched"] = True
     if composite is not None or comp_err is not None:
         detail["composite"] = {"ok": composite is not None, "error": comp_err}
     conn = _db()
@@ -832,14 +884,197 @@ def hubspot_writeback(domain, trigger_results):
         return {"ok": False, "error": str(exc)[:300]}
 
 
+# ---- batched research (Message Batches API — 50% token cost) -----------------
+# Bulk backfills run through /v1/messages/batches by default (NEWS_BATCH=0
+# forces the old synchronous thread pool): tokens bill at half price, web-search
+# fees are unchanged. The two-wave cross-reference design maps to two
+# sequential batches; results usually land well under an hour. The drawer's
+# single-account "Research news" stays synchronous (detect_and_store).
+def _batch_verdict_from_result(tid, result, model):
+    """One batch result line → the same verdict shape _research_trigger emits."""
+    out = _blank_verdict(tid, model=model)
+    try:
+        if (result or {}).get("type") == "succeeded":
+            if str(AI_SDR_SCRIPTS) not in sys.path:
+                sys.path.insert(0, str(AI_SDR_SCRIPTS))
+            from anthropic_client import parse_message  # noqa: E402
+            _finish_verdict(tid, out, parse_message(result["message"]))
+        else:
+            err = (result or {}).get("error") or {}
+            out["error"] = f"batch {((result or {}).get('type') or 'missing')}: " \
+                           f"{json.dumps(err)[:220]}"
+    except Exception as exc:  # noqa: BLE001 — one bad result never kills the run
+        out["error"] = f"{type(exc).__name__}: {exc}"[:300]
+    return out
+
+
+def _run_batch_wave(reqs, idx_map, phase, label):
+    """Submit one wave's requests, poll to completion, and classify every line.
+    Returns {custom_id: verdict}; a request the results file never mentions
+    gets an errored verdict (never silently dropped)."""
+    client = _client()
+    batch = client.create_batch(reqs)
+    bid = batch.get("id") or ""
+    log(f"{label}: batch {bid} submitted ({len(reqs)} requests)")
+    poll = max(5, _env_int("NEWS_BATCH_POLL_S", 20))
+    deadline = time.monotonic() + max(300, _env_int("NEWS_BATCH_TIMEOUT_S", 14400))
+    while batch.get("processing_status") != "ended":
+        if time.monotonic() > deadline:
+            raise RuntimeError(f"{label}: batch {bid} timed out "
+                               f"(NEWS_BATCH_TIMEOUT_S) — cancel or retry later")
+        time.sleep(poll)
+        batch = client.get_batch(bid)
+        counts = batch.get("request_counts") or {}
+        finished = sum(counts.get(k, 0) for k in ("succeeded", "errored", "canceled", "expired"))
+        if phase:
+            try:
+                phase(f"{label}: {finished}/{len(reqs)} requests done (batch {bid})")
+            except Exception:  # noqa: BLE001 — phase is cosmetic
+                pass
+    verdicts = {}
+    for line in client.get_batch_results(batch["results_url"]):
+        cid = line.get("custom_id") or ""
+        if cid in idx_map:
+            tid, _plan, model = idx_map[cid]
+            verdicts[cid] = _batch_verdict_from_result(tid, line.get("result"), model)
+    for cid, (tid, _plan, model) in idx_map.items():
+        if cid not in verdicts:
+            v = _blank_verdict(tid, model=model)
+            v["error"] = f"batch {bid}: no result line returned"
+            verdicts[cid] = v
+    return verdicts
+
+
+def _backfill_batched(items, workers, force, hubspot, progress, phase, triggers):
+    """The batched twin of the sync backfill loop: same freshness rule, same
+    stored shapes, same summary. items = [(domain, company|None)]."""
+    wanted = enabled_triggers(triggers)
+    summary = {"total": len(items), "detected": 0, "skipped": 0, "errors": 0,
+               "hubspot_ok": 0, "hubspot_missing": 0, "batched": True}
+    done = [0]
+
+    def _tick(domain, res):
+        done[0] += 1
+        if res.get("error_exc") or res.get("news_error"):
+            summary["errors"] += 1
+        elif res.get("skipped"):
+            summary["skipped"] += 1
+        else:
+            summary["detected"] += 1
+        hs = res.get("hubspot") or {}
+        if hs.get("ok"):
+            summary["hubspot_ok"] += 1
+        elif hs.get("reason") == "no_company":
+            summary["hubspot_missing"] += 1
+        if progress:
+            try:
+                progress(done[0], len(items), domain, res)
+            except Exception:  # noqa: BLE001 — progress is cosmetic
+                pass
+
+    # Plan pass: same freshness skip as detect_and_store, plus the row context
+    # (tech line, hiring line, EBS pre-condition) every later step needs.
+    refresh_days = _env_float("NEWS_REFRESH_DAYS", 30)
+    plans = []
+    conn = _db()
+    try:
+        for idx, (d, c) in enumerate(items):
+            row = db.get_signal(conn, d)
+            if (row and not force and row.get("news_signals") is not None
+                    and db.news_fresh(row, days=refresh_days)):
+                _tick(d, {"skipped": True})
+                continue
+            plans.append({"idx": idx, "domain": d,
+                          "company": c or (row or {}).get("company_name"),
+                          "row": row, "tech_line": (row or {}).get("tech_signals"),
+                          "ebs": _ebs_detected(row), "results": {}})
+    finally:
+        conn.close()
+    if not plans:
+        return summary
+
+    def _skip_reason(tid, plan):
+        if tid != "ebs_performance":
+            return None
+        if plan["ebs"] is None:
+            return "tech scan has not run (Oracle EBS pre-condition unknown)"
+        if not plan["ebs"]:
+            return "Oracle EBS not detected by the tech scan"
+        return None
+
+    for wave_no, wave in enumerate(TRIGGER_WAVES, start=1):
+        reqs, idx_map = [], {}
+        for plan in plans:
+            for tid in wave:
+                if tid not in wanted:
+                    continue
+                reason = _skip_reason(tid, plan)
+                if reason:
+                    plan["results"][tid] = {"label": TRIGGERS[tid]["label"], "skipped": reason}
+                    continue
+                ms = _max_searches(tid)
+                client = _client(_trigger_model(tid))
+                cid = f"{tid}:{plan['idx']}"  # custom_id caps at 64 chars — never the domain
+                reqs.append({"custom_id": cid, "params": client.build_body(
+                    build_system(ms),
+                    build_user(tid, plan["company"], plan["domain"], ms,
+                               tech_line=plan["tech_line"],
+                               prior=plan["results"].get(TRIGGERS[tid].get("context_from"))),
+                    use_web_search=True, max_web_searches=ms,
+                    max_tokens=MAX_TOKENS, cache_ttl="1h")})
+                idx_map[cid] = (tid, plan, client.model)
+        if not reqs:
+            continue
+        verdicts = _run_batch_wave(reqs, idx_map, phase, f"wave {wave_no}")
+        for cid, verdict in verdicts.items():
+            tid, plan, _model = idx_map[cid]
+            plan["results"][tid] = verdict
+
+    # Assemble each domain's detect_domain-shaped result, then store — the
+    # write-back/composite finalize is network-bound, so a small thread pool.
+    default_model = None
+    try:
+        default_model = _client().model
+    except Exception:  # noqa: BLE001
+        pass
+
+    def _finalize(plan):
+        results = {tid: plan["results"][tid] for tid in TRIGGERS if tid in plan["results"]}
+        researched = [r for r in results.values() if "skipped" not in r]
+        errors = [r for r in researched if r.get("error")]
+        error = None
+        formatted = format_line(results)
+        if researched and len(errors) == len(researched):
+            error = "; ".join(f"{r['label']}: {r['error']}" for r in errors)[:500]
+            formatted = None
+        res = {"formatted": formatted, "triggers": results, "error": error,
+               "found_count": sum(1 for r in results.values() if r.get("found")),
+               "web_searches": sum(r.get("web_searches", 0) for r in researched),
+               "duration_ms": None, "model": default_model, "batched": True}
+        try:
+            return plan["domain"], _store_scan(plan["domain"], plan["company"],
+                                               plan["row"], res, hubspot)
+        except Exception as exc:  # noqa: BLE001 — one bad domain never kills the run
+            return plan["domain"], {"domain": plan["domain"], "error_exc": str(exc)[:300]}
+
+    with ThreadPoolExecutor(max_workers=max(1, int(workers))) as ex:
+        for d, res in ex.map(_finalize, plans):
+            _tick(d, res)
+    return summary
+
+
 # ---- bulk ---------------------------------------------------------------------
 def backfill(domains=None, stale_days=None, limit=None, workers=2, force=False,
-             hubspot=None, progress=None, triggers=None):
-    """Research many domains (ThreadPoolExecutor; keep workers small — each
-    scan already fans out to up to 3 concurrent web-search calls, and every
-    non-skipped scan is real API spend). domains=None pulls the never-scanned
-    (plus stale, when stale_days is set) from account_signals. Returns {total,
-    detected, skipped, errors, hubspot_ok, hubspot_missing}."""
+             hubspot=None, progress=None, triggers=None, batched=None, phase=None):
+    """Research many domains. Default path: the Message Batches API (50% token
+    cost; NEWS_BATCH=0 or batched=False forces the synchronous thread pool,
+    which also handles runs smaller than NEWS_BATCH_MIN, default 3). Sync mode:
+    ThreadPoolExecutor — keep workers small, each scan already fans out to up
+    to 3 concurrent web-search calls, and every non-skipped scan is real API
+    spend. domains=None pulls the never-scanned (plus stale, when stale_days is
+    set) from account_signals. `phase` (optional) receives coarse batch-progress
+    strings. Returns {total, detected, skipped, errors, hubspot_ok,
+    hubspot_missing, batched?}."""
     ok, reason = news_available()
     if not ok:
         raise RuntimeError(f"news research unavailable: {reason}")
@@ -860,6 +1095,10 @@ def backfill(domains=None, stale_days=None, limit=None, workers=2, force=False,
                "hubspot_ok": 0, "hubspot_missing": 0}
     if not items:
         return summary
+
+    use_batch = _flag("NEWS_BATCH", True) if batched is None else bool(batched)
+    if use_batch and len(items) >= max(1, _env_int("NEWS_BATCH_MIN", 3)):
+        return _backfill_batched(items, workers, force, hubspot, progress, phase, triggers)
 
     def work(item):
         d, c = item
@@ -930,6 +1169,31 @@ def self_test():
         except Exception as exc:  # noqa: BLE001
             prompt_errors.append(f"{tid}: {exc}")
 
+    # Per-trigger model + search-cap resolution (env saved/restored)
+    saved = {k: os.environ.get(k) for k in ("NEWS_MODEL_MA_CARVEOUT", "NEWS_MAX_SEARCHES")}
+    try:
+        os.environ["NEWS_MODEL_MA_CARVEOUT"] = "claude-haiku-4-5"
+        tm_env = _trigger_model("ma_carveout")
+        tm_default = _trigger_model("erp_migration")
+        os.environ["NEWS_MAX_SEARCHES"] = "2"
+        ms_env = _max_searches("erp_migration")
+        os.environ.pop("NEWS_MAX_SEARCHES")
+        ms_spec = (_max_searches("ma_carveout"), _max_searches("erp_migration"))
+    finally:
+        for k, v in saved.items():
+            (os.environ.__setitem__(k, v) if v is not None else os.environ.pop(k, None))
+
+    # Batch result lines classify exactly like the sync path (offline: no key)
+    bv_ok = _batch_verdict_from_result("ma_carveout", {"type": "succeeded", "message": {
+        "content": [{"type": "text", "text": json.dumps(_FIXTURE_FOUND)}],
+        "usage": {"input_tokens": 1200, "output_tokens": 150},
+        "stop_reason": "end_turn"}}, "claude-sonnet-5")
+    bv_floor = _batch_verdict_from_result("license_audit", {"type": "succeeded", "message": {
+        "content": [{"type": "text", "text": json.dumps({**_FIXTURE_FOUND, "score": 40})}],
+        "usage": {}, "stop_reason": "end_turn"}}, None)
+    bv_err = _batch_verdict_from_result("ebs_oci", {"type": "errored",
+                                                    "error": {"type": "api_error"}}, None)
+
     line = format_line({"ma_carveout": v_found,
                         "erp_migration": {"found": True, "score": 91, "headline": "Mid-implementation S/4HANA program"},
                         "license_audit": v_none,
@@ -997,6 +1261,18 @@ def self_test():
          TRIGGERS["license_audit"].get("min_found_score") == 55
          and "Never report found=true with a score below 55" in TRIGGERS["license_audit"]["brief"]
          and not any(TRIGGERS[t].get("min_found_score") for t in TRIGGERS if t != "license_audit")),
+        ("per-trigger model: env override wins, default falls through",
+         tm_env == "claude-haiku-4-5" and tm_default is None),
+        ("search caps: live-tuned spec values, NEWS_MAX_SEARCHES overrides",
+         ms_spec == (3, 4) and ms_env == 2),
+        ("batch result classifies like the sync path (usage + model captured)",
+         bv_ok["found"] and bv_ok["score"] == 88 and bv_ok["model"] == "claude-sonnet-5"
+         and bv_ok.get("usage", {}).get("input_tokens") == 1200),
+        ("batch result honors the license_audit found floor",
+         not bv_floor["found"] and bv_floor["score"] == 0
+         and "below the 55-point found bar" in bv_floor["summary"]),
+        ("errored batch line yields an error verdict, never found",
+         not bv_err["found"] and (bv_err["error"] or "").startswith("batch errored")),
     ]
     failed_names = [name for name, passed in checks if not passed]
     for name, passed in checks:
@@ -1026,6 +1302,9 @@ def main():
                     help="with --missing: also re-research scans older than N days")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--workers", type=int, default=2)
+    ap.add_argument("--sync", action="store_true",
+                    help="force the synchronous thread pool (skip the Message "
+                         "Batches API and its 50%% token discount)")
     args = ap.parse_args()
 
     if args.self_test:
@@ -1049,7 +1328,8 @@ def main():
 
     summary = backfill(stale_days=args.stale_days, limit=args.limit, workers=args.workers,
                        force=args.force, hubspot=hubspot, progress=progress,
-                       triggers=triggers)
+                       triggers=triggers, batched=False if args.sync else None,
+                       phase=lambda msg: log(msg))
     log(f"done: {summary}")
     print(json.dumps(summary))
 

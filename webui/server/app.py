@@ -3770,10 +3770,15 @@ def start_news_backfill(limit=None, stale_days=None, force=False):
                   else "skip" if res.get("skipped") else "ok")
         job["log"] = (job["log"] + [f"{domain}: {status}"])[-40:]
 
+    def _phase(msg):
+        # Batch-mode coarse progress ("wave 1: 240/1048 requests done") — rides
+        # the `current` slot the UI already renders.
+        job["current"] = msg
+
     def _run():
         try:
             summary = N.backfill(stale_days=stale_days, limit=limit, force=force,
-                                 workers=2, progress=_progress)
+                                 workers=2, progress=_progress, phase=_phase)
             job.update(summary)  # total/detected/skipped/errors/hubspot_ok/hubspot_missing
             job["status"] = "done"
         except Exception as e:  # noqa: BLE001
