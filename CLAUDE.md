@@ -263,6 +263,14 @@ triggers, via the Anthropic Messages API + server-side `web_search` (the same ch
 - **HubSpot write-back:** found-trigger lines (with score/date/source URL) PATCH the
   company property `erp_news_signals` (auto-ensured, textarea; matched by `domain`;
   best-effort; `NEWS_HUBSPOT_WRITEBACK=0` kills it).
+- **Composite signal (2026-09):** when a scan FOUND ≥1 trigger, `detect_and_store` makes
+  one extra no-web-search call (`compose_signal`) that synthesizes the verdicts + tech/
+  hiring context into the account's top-line `signal` (stored via `upsert_signal`, so
+  `researched_at`/`has_recent` populate and the Signals table/drawer Signal field is no
+  longer empty for scan-created rows). Never blanks an existing signal (found_count 0 =
+  no write); outcome recorded in `news_detail.composite`; `NEWS_COMPOSITE_SIGNAL=0` kills
+  it. Both prompts anchor today's date and forbid adopting a stale source's tense (a
+  past "projected go-live" is a completed event — the 2026-09 date-reasoning fix).
 - **Cost gotcha (load-bearing):** every non-skipped scan is up to 5 web-search API
   calls — run first backfills with `--limit`, and remember the post-batch tail
   researches every new domain a batch touches.

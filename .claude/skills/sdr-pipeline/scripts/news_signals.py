@@ -169,6 +169,12 @@ company for ONE specific buying trigger, using web search, and return a strict J
 # Today's date
 Today is {today}. Judge every date you find against this — recency windows are strict. BEFORE you use
 any item, verify its date; never present old news as recent.
+Web pages are written at a moment in time and go stale: a page describing a "projected", "planned",
+or "upcoming" event may have been written long before you are reading it. NEVER adopt a source's
+tense — convert every date a source mentions into how long ago (or how far ahead) it is relative to
+today before judging recency or stage. A "projected go-live" or "expected close" date that is
+already in the past means that event has likely HAPPENED; reason about what is true today, not what
+was true when the page was written.
 
 # Ground rules
 - The email domain is ground truth for WHO the company is. If the stated company name does not match
@@ -240,6 +246,12 @@ details to extract: {{"platform": "<Oracle Fusion Cloud|SAP S/4HANA|other|''>", 
 Scoring: evaluating = 40-60, selected = 60-75, MID-IMPLEMENTATION = 75-95 (the sweet spot —
 data-migration pain is imminent). Program news may be older than 90 days if the program is clearly
 still running.
+Determine the stage AS OF TODAY, not as of the source's writing: compare every milestone date
+(selection, kickoff, projected go-live) against today's date. A "projected" or "planned" go-live
+that is already in the past is NOT mid-implementation — the cutover most likely happened; only
+report mid-implementation with evidence the program is still running today (post-go-live
+stabilization work, ongoing data migration, currently-open program job reqs). A go-live that passed
+without such evidence is a completed migration — score it as such or disqualify it.
 DISQUALIFIERS (report found=false): a migration COMPLETED more than a year ago with nothing still
 running; generic "digital transformation" talk with no ERP program behind it.
 """,
@@ -448,6 +460,63 @@ def format_line(trigger_results):
     return " · ".join(parts)
 
 
+# ---- composite signal (the account's top-line "Signal") ----------------------
+# One extra no-web-search call after a scan that FOUND at least one trigger:
+# synthesizes the verdicts (+ tech/hiring context) into the best outreach angle
+# and stores it via upsert_signal, so the Signals table/drawer "Signal" field —
+# empty for scan-created rows — carries a human-readable composite.
+# NEWS_COMPOSITE_SIGNAL=0 disables.
+COMPOSITE_SYSTEM = """\
+You are a B2B sales-research synthesizer for Value Global's ERP Data Retirement offering (Oracle EBS
+archiving/retirement on the InfoCorvus ROAD platform). Today is {today}. You are given one account's
+research: the ERP-trigger verdicts a web-research pass already produced, plus deterministic
+technographic and hiring scans. Write the account's SIGNAL — the composite best outreach angle.
+
+Rules:
+- 2-3 plain sentences, max ~90 words. No markdown, no preamble, no headings.
+- Lead with the strongest trigger (what happened and when), then connect it to the ERP
+  data-retirement need it creates. Weave in a second trigger or the detected ERP stack only when it
+  sharpens the angle — never list everything.
+- Use ONLY the facts given. Never invent or upgrade a weak signal. Judge every event date relative
+  to today — an event in the past is described as past.
+- Write for the SDR who will anchor an email on it, not for the prospect."""
+
+
+def build_composite_user(company, domain, trigger_results, tech_line=None, hiring_line=None):
+    """The user message for the composite-signal call: found verdicts score-desc
+    plus the deterministic scan context."""
+    found = [(tid, r) for tid, r in trigger_results.items()
+             if isinstance(r, dict) and r.get("found")]
+    found.sort(key=lambda x: -(x[1].get("score") or 0))
+    lines = [f"Company: {company or domain} (email domain: {domain})",
+             f"Detected tech stack: {tech_line or '(not scanned)'}"]
+    if hiring_line:
+        lines.append(f"Hiring scan: {hiring_line}")
+    lines.append("\nFound ERP triggers (strongest first):")
+    for tid, r in found:
+        when = f" [{r['date']}]" if r.get("date") else ""
+        lines.append(f"- {TRIGGERS[tid]['label']} (score {r.get('score', 0)}){when}: "
+                     f"{r.get('headline', '')}\n  {r.get('summary', '')}")
+    lines.append("\nWrite the composite signal now — plain text only.")
+    return "\n".join(lines)
+
+
+def compose_signal(company, domain, trigger_results, tech_line=None, hiring_line=None):
+    """Synthesize the composite signal. Returns (text, error) — never raises;
+    (None, <error>) on failure so a bad call never kills the scan."""
+    try:
+        res = _client().complete(
+            COMPOSITE_SYSTEM.format(today=datetime.now().strftime("%B %d, %Y")),
+            build_composite_user(company, domain, trigger_results,
+                                 tech_line=tech_line, hiring_line=hiring_line),
+            max_tokens=400, timeout=120,
+        )
+        text = " ".join((res.get("text") or "").split()).strip()
+        return (_truncate(text, 700) or None), None
+    except Exception as exc:  # noqa: BLE001
+        return None, f"{type(exc).__name__}: {exc}"[:300]
+
+
 def _ebs_detected(row):
     """Did the tech scan detect Oracle E-Business Suite on this account?
     True/False from a completed scan; None when no tech scan has run (or the
@@ -649,6 +718,16 @@ def detect_and_store(domain, company=None, force=False, hubspot=None, triggers=N
         enabled = _flag("NEWS_HUBSPOT_WRITEBACK", True) if hubspot is None else bool(hubspot)
         hs = hubspot_writeback(host, res["triggers"]) if enabled else {"ok": False, "reason": "disabled"}
 
+    # Composite signal (network call — like the write-back, NEVER hold a DB
+    # connection across it). Only when the scan actually found something; a
+    # found_count of 0 must never blank an existing signal.
+    composite, comp_err = None, None
+    if res["found_count"] > 0 and _flag("NEWS_COMPOSITE_SIGNAL", True):
+        composite, comp_err = compose_signal(
+            company, host, res["triggers"],
+            tech_line=(row or {}).get("tech_signals"),
+            hiring_line=(row or {}).get("hiring_signals"))
+
     detail = {
         "triggers": res["triggers"],
         "found_count": res["found_count"],
@@ -658,11 +737,15 @@ def detect_and_store(domain, company=None, force=False, hubspot=None, triggers=N
         "max_searches": max(1, _env_int("NEWS_MAX_SEARCHES", 4)),
         "hubspot": hs,
     }
+    if composite is not None or comp_err is not None:
+        detail["composite"] = {"ok": composite is not None, "error": comp_err}
     conn = _db()
     try:
         db.upsert_news_signals(conn, host, res["formatted"],
                                news_detail=json.dumps(detail, ensure_ascii=False),
                                news_error=res["error"], company_name=company)
+        if composite:
+            db.upsert_signal(conn, host, company, composite, True, model=res["model"])
         stored = db.get_signal(conn, host) or {}
     finally:
         conn.close()
@@ -870,6 +953,16 @@ def self_test():
         ("property value lists found triggers with source URLs",
          "https://example.com/pr" in property_value({"ma_carveout": v_found})
          and property_value({}) == NO_NEWS),
+        ("composite system prompt formats with today's date",
+         "Today is January 01, 2026" in COMPOSITE_SYSTEM.format(today="January 01, 2026")),
+        ("composite user carries only FOUND verdicts plus the scan context",
+         (lambda p: "Acme Corp" in p and "M&A carve-out" in p and "License audit" not in p
+          and "ERP: Oracle E-Business Suite" in p)
+         (build_composite_user("Acme Corp", "acme.com",
+                               {"ma_carveout": v_found, "license_audit": v_none},
+                               tech_line="ERP: Oracle E-Business Suite"))),
+        ("system prompt warns against adopting a stale source's tense",
+         "NEVER adopt a source's" in build_system(4)),
     ]
     failed_names = [name for name, passed in checks if not passed]
     for name, passed in checks:
