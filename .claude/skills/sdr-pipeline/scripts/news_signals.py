@@ -963,6 +963,14 @@ def _store_scan(host, company, res, hubspot):
     }
     if res.get("batched"):
         detail["batched"] = True
+    # The model that WROTE the composite (NEWS_COMPOSITE_MODEL chain) — never
+    # the research model(s): the two diverge the moment either override is set.
+    comp_model = None
+    if composite:
+        try:
+            comp_model = _client((os.environ.get("NEWS_COMPOSITE_MODEL") or "").strip() or None).model
+        except Exception:  # noqa: BLE001
+            pass
     conn = _db()
     try:
         # The composite write goes FIRST (fill-only, never clobbers a fresh
@@ -972,7 +980,7 @@ def _store_scan(host, company, res, hubspot):
         if composite:
             try:
                 stored_composite = db.upsert_composite_signal(
-                    conn, host, composite, model=res["model"],
+                    conn, host, composite, model=comp_model,
                     has_recent=any(isinstance(r, dict) and r.get("found")
                                    for t, r in res["triggers"].items()
                                    if t != "ebs_performance"))
@@ -981,7 +989,8 @@ def _store_scan(host, company, res, hubspot):
                 log(f"composite store for {host} failed: {exc}")
         if res["found_count"] > 0 and _flag("NEWS_COMPOSITE_SIGNAL", True):
             detail["composite"] = {"ok": composite is not None and comp_err is None,
-                                   "stored": stored_composite, "error": comp_err}
+                                   "stored": stored_composite, "error": comp_err,
+                                   "model": comp_model}
         db.upsert_news_signals(conn, host, res["formatted"],
                                news_detail=json.dumps(detail, ensure_ascii=False),
                                news_error=res["error"], company_name=company)
@@ -1473,7 +1482,7 @@ def recompose_stored(limit=None, force=False):
             continue
         model = None
         try:
-            model = _client().model
+            model = _client((os.environ.get("NEWS_COMPOSITE_MODEL") or "").strip() or None).model
         except Exception:  # noqa: BLE001
             pass
         conn = _db()
