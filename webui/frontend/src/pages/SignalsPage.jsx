@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api.js'
 import { Stat, Spinner, ErrorBanner, num } from '../components/ui.jsx'
 import SignalDetail from '../components/SignalDetail.jsx'
@@ -16,6 +16,21 @@ const NO_TECH = 'No signals detected'
 const NO_HIRING = 'No open roles detected'
 const NO_NEWS = 'No ERP news signals detected'
 
+// Sortable header cell: click cycles ascending → descending → server default.
+// The control is a native button (keyboard-operable); aria-sort stays on the th.
+function SortTh({ label, k, sort, onSort, width }) {
+  const active = sort?.key === k
+  return (
+    <th style={{ width, whiteSpace: 'nowrap' }}
+      aria-sort={active ? (sort.dir === 1 ? 'ascending' : 'descending') : undefined}>
+      <button type="button" className="th-sort" onClick={() => onSort(k)}
+        title={`Sort by ${label.toLowerCase()}`}>
+        {label}{active ? (sort.dir === 1 ? ' ▲' : ' ▼') : ''}
+      </button>
+    </th>
+  )
+}
+
 export default function SignalsPage() {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
@@ -25,6 +40,11 @@ export default function SignalsPage() {
   const [hiringJob, setHiringJob] = useState(null)
   const [newsJob, setNewsJob] = useState(null)
   const [openDomain, setOpenDomain] = useState(null)
+  const [sort, setSort] = useState(null) // { key, dir: 1|-1 } | null = server order
+
+  function toggleSort(k) {
+    setSort((s) => (!s || s.key !== k) ? { key: k, dir: 1 } : s.dir === 1 ? { key: k, dir: -1 } : null)
+  }
 
   function load() {
     api.signals().then((d) => { setData(d); setError(null) }).catch((e) => setError(e.message))
@@ -114,9 +134,23 @@ export default function SignalsPage() {
     return () => clearInterval(t)
   }, [newsJob?.job_id, newsJob?.status])
 
-  const signals = data?.signals || []
+  const signals = useMemo(() => data?.signals || [], [data])
+  // Client-side sort (the list is returned unpaginated); null/missing values
+  // always sink to the bottom regardless of direction.
+  const sorted = useMemo(() => {
+    if (!sort) return signals
+    const { key, dir } = sort
+    return [...signals].sort((a, b) => {
+      const av = a[key], bv = b[key]
+      if (av == null && bv == null) return 0
+      if (av == null) return 1
+      if (bv == null) return -1
+      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir
+      return String(av).localeCompare(String(bv), undefined, { sensitivity: 'base' }) * dir
+    })
+  }, [signals, sort])
   const fresh = signals.filter((s) => s.fresh).length
-  const recent = signals.filter((s) => s.has_recent).length
+  const withTrigger = signals.filter((s) => s.trigger).length
   const scanned = signals.filter((s) => s.tech_age_days != null).length
   const withTech = signals.filter((s) => s.tech_signals && s.tech_signals !== NO_TECH).length
   const missing = signals.filter((s) => s.tech_age_days == null).length
@@ -143,8 +177,8 @@ export default function SignalsPage() {
       <div className="grid stat-grid" style={{ marginBottom: 20 }}>
         <Stat label="Cached accounts" value={num(data?.count || 0)} />
         <Stat label="Fresh (<90d)" value={num(fresh)} sub="reused, no re-search" />
-        <Stat label="Real signal" value={num(recent)} tone="good" />
-        <Stat label="Fallback (no signal)" value={num(signals.length - recent)} sub="product/GTM anchor" tone="warn" />
+        <Stat label="ERP trigger found" value={num(withTrigger)} tone="good" />
+        <Stat label="No trigger" value={num(newsScanned - withTrigger)} sub="researched, none found" tone="warn" />
         <Stat label="Tech scanned" value={techOff ? '—' : num(scanned)}
           sub={techOff ? (data?.tech_reason || 'detection unavailable') : `${num(withTech)} with detections`}
           tone={techOff ? 'warn' : undefined} />
@@ -210,18 +244,18 @@ export default function SignalsPage() {
               a narrow window. */}
           <table className="dense" style={{ tableLayout: 'fixed', width: '100%', minWidth: 1220 }}>
             <thead><tr>
-              <th style={{ width: '12%' }}>Domain</th>
-              <th style={{ width: '9%' }}>Company</th>
-              <th style={{ width: '5%' }}>Type</th>
-              <th style={{ width: '15%' }}>Signal</th>
-              <th style={{ width: '12%' }}>Tech</th>
-              <th style={{ width: '13%' }}>Hiring</th>
-              <th style={{ width: '15%' }}>News</th>
-              <th style={{ width: '4%' }}>Age</th>
+              <SortTh label="Domain" k="domain" sort={sort} onSort={toggleSort} width="12%" />
+              <SortTh label="Company" k="company_name" sort={sort} onSort={toggleSort} width="9%" />
+              <SortTh label="Trigger" k="trigger_label" sort={sort} onSort={toggleSort} width="8%" />
+              <SortTh label="Signal" k="signal" sort={sort} onSort={toggleSort} width="13%" />
+              <SortTh label="Tech" k="tech_signals" sort={sort} onSort={toggleSort} width="11%" />
+              <SortTh label="Hiring" k="hiring_signals" sort={sort} onSort={toggleSort} width="12%" />
+              <SortTh label="News" k="news_signals" sort={sort} onSort={toggleSort} width="14%" />
+              <SortTh label="Age" k="age_days" sort={sort} onSort={toggleSort} width="6%" />
               <th style={{ width: '15%' }}></th>
             </tr></thead>
             <tbody>
-              {signals.map((s) => (
+              {sorted.map((s) => (
                 <tr key={s.domain} className="clickable" onClick={() => setOpenDomain(s.domain)}>
                   <td className="mono">
                     <span title={s.domain} style={{ display: 'inline-block', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom' }}>{s.domain}</span>
@@ -232,9 +266,14 @@ export default function SignalsPage() {
                       : <span className="muted">—</span>}
                   </td>
                   <td>
-                    {s.has_recent
-                      ? <span className="badge" style={{ color: 'var(--green)', borderColor: 'var(--green)' }}>recent</span>
-                      : <span className="badge" style={{ color: 'var(--amber)', borderColor: 'var(--amber)' }}>fallback</span>}
+                    {s.trigger_label
+                      ? <span className="badge" title={s.trigger_label}
+                          style={{ color: 'var(--green)', borderColor: 'var(--green)', display: 'inline-block', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom' }}>
+                          {s.trigger_label}
+                        </span>
+                      : s.news_age_days != null
+                        ? <span className="muted" title="News research ran, no ERP trigger found">none</span>
+                        : <span className="muted" title="News research hasn't run for this account yet">not researched</span>}
                   </td>
                   <td className="muted">
                     <span className="clamp2" title={s.signal}>{s.signal}</span>
@@ -246,7 +285,7 @@ export default function SignalsPage() {
                         {s.tech_signals}
                       </span>
                     ) : s.tech_signals === NO_TECH ? (
-                      <span className="muted" title={s.tech_age_days != null ? `scanned ${s.tech_age_days}d ago` : undefined}>none detected</span>
+                      <span className="muted" title={s.tech_age_days != null ? `scanned ${s.tech_age_days}d ago` : undefined}>no ERP detected</span>
                     ) : s.tech_error ? (
                       <span className="badge" style={{ color: 'var(--red)', borderColor: 'var(--red)' }} title={s.tech_error}>scan failed</span>
                     ) : (
@@ -282,7 +321,8 @@ export default function SignalsPage() {
                     )}
                   </td>
                   <td>
-                    <span style={{ color: s.fresh ? 'var(--muted)' : 'var(--red)' }}>
+                    <span style={{ color: s.fresh ? 'var(--muted)' : 'var(--red)' }}
+                      title="Days since the last research/scan activity for this account">
                       {s.age_days == null ? '—' : `${s.age_days}d`}
                     </span>
                   </td>

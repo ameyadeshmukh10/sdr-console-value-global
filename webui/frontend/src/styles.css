@@ -84,7 +84,7 @@ a:hover { text-decoration: underline; }
 .sidebar .foot { color: rgba(255, 255, 255, 0.38); font-size: 10.5px; padding: 10px; line-height: 1.6; letter-spacing: .2px; }
 
 /* Main */
-.main { flex: 1; padding: 36px 44px; max-width: 1180px; }
+.main { flex: 1; padding: 36px 44px; max-width: 1720px; }
 .page-title { font-size: 30px; font-weight: 600; letter-spacing: -.6px; line-height: 1.1; margin: 0 0 6px; }
 .page-sub { color: var(--muted); font-size: 14.5px; line-height: 1.5; max-width: 680px; margin: 0 0 28px; }
 
@@ -128,6 +128,12 @@ label.field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; 
 
 /* Inline text-style button (disclosure toggles, reset links) */
 button.linklike { background: none; border: none; padding: 0; color: var(--accent, #0a7); font-weight: 600; cursor: pointer; }
+/* Sortable-header button: renders exactly like the th text it sits in */
+th button.th-sort {
+  background: none; border: none; padding: 0; border-radius: 0; cursor: pointer; user-select: none;
+  font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit;
+}
+th button.th-sort:hover { filter: none; color: var(--text); }
 button.linklike:hover { text-decoration: underline; }
 
 /* Pill tabs (SLA wizard steps) */
@@ -153,6 +159,7 @@ tbody tr:last-child td { border-bottom: none; }
 tbody tr:hover { background: var(--surface-hover); }
 tr.clickable { cursor: pointer; transition: background .12s; }
 tr.clickable:hover { background: var(--surface-hover); }
+tr.clickable:focus-visible { outline: 2px solid var(--jade); outline-offset: -2px; background: var(--surface-hover); }
 
 /* Badges — pill, brand-harmonized */
 .badge {
@@ -207,16 +214,16 @@ tr.clickable:hover { background: var(--surface-hover); }
 /* Detail drawer */
 .drawer-backdrop { position: fixed; inset: 0; background: rgba(15, 28, 24, 0.32); z-index: 40; }
 .drawer {
-  position: fixed; top: 0; right: 0; height: 100vh; width: 620px; max-width: 94vw; z-index: 50;
+  position: fixed; top: 0; right: 0; height: 100vh; width: min(860px, 94vw); z-index: 50;
   background: var(--panel); border-left: 1px solid var(--border); overflow-y: auto; padding: 28px 30px;
   box-shadow: var(--shadow-md); animation: drawer-in .18s ease-out;
 }
 @keyframes drawer-in { from { transform: translateX(12px); opacity: .6; } to { transform: none; opacity: 1; } }
 .touch { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 16px 18px; margin-bottom: 14px; background: var(--panel-2); }
 .touch .subj { font-weight: 700; margin-bottom: 8px; }
-.touch .body { white-space: pre-wrap; color: var(--text); font-size: 13.5px; }
+.touch .body { white-space: pre-wrap; overflow-wrap: break-word; color: var(--text); font-size: 13.5px; }
 .touch .step { color: var(--faint); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .7px; margin-bottom: 6px; }
-.kv { display: grid; grid-template-columns: 120px 1fr; gap: 8px 16px; margin: 16px 0; font-size: 13px; }
+.kv { display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px; margin: 16px 0; font-size: 13px; }
 .kv .k { color: var(--muted); }
 .section-h { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px; color: var(--faint); margin: 24px 0 12px; }
 .close-x { float: right; background: #fff; border: 1px solid var(--border-strong); color: var(--text); padding: 4px 12px; font-weight: 600; }

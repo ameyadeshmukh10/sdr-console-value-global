@@ -82,9 +82,14 @@ export default function SignalDetail({ domain, onClose, onChanged }) {
               {s.company_name || <span className="muted">no company name</span>}
             </p>
             <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-              <span className="badge" style={{ color: s.has_recent ? 'var(--green)' : 'var(--amber)', borderColor: s.has_recent ? 'var(--green)' : 'var(--amber)' }}>
-                {s.has_recent ? 'recent signal' : 'fallback'}
-              </span>
+              {(() => {
+                const win = newsTriggers.find(([, r]) => r.found)
+                return win
+                  ? <span className="badge" style={{ color: 'var(--green)', borderColor: 'var(--green)' }}>{win[1].label || win[0]}</span>
+                  : s.news_checked_at
+                    ? <span className="badge" style={{ color: 'var(--amber)', borderColor: 'var(--amber)' }}>no ERP trigger</span>
+                    : <span className="badge muted">not researched</span>
+              })()}
               {s.age_days != null && (
                 <span className="badge" style={{ color: s.fresh ? 'var(--muted)' : 'var(--red)' }}>
                   researched {s.age_days}d ago{s.fresh ? '' : ' · stale'}
@@ -93,7 +98,7 @@ export default function SignalDetail({ domain, onClose, onChanged }) {
               {s.tech_signals && s.tech_signals !== NO_TECH
                 ? <span className="badge" style={{ color: 'var(--jade)', borderColor: 'var(--jade)' }}>{dets.length} tech</span>
                 : s.tech_signals === NO_TECH
-                  ? <span className="badge muted">no tech detected</span>
+                  ? <span className="badge muted">no ERP detected</span>
                   : s.tech_error
                     ? <span className="badge" style={{ color: 'var(--red)', borderColor: 'var(--red)' }}>scan failed</span>
                     : <span className="badge muted">not scanned</span>}
@@ -167,7 +172,7 @@ export default function SignalDetail({ domain, onClose, onChanged }) {
                 )}
               </>
             ) : s.tech_signals === NO_TECH ? (
-              <p className="muted" style={{ marginBottom: 12 }}>Scan ran, no marketing/sales tech matched.</p>
+              <p className="muted" style={{ marginBottom: 12 }}>Scan ran — no Oracle ERP suite detected (EBS, Fusion Cloud ERP, PeopleSoft, JD Edwards).</p>
             ) : s.tech_error ? (
               <div className="touch"><div className="body" style={{ color: 'var(--red)' }}>Scan failed: {s.tech_error}</div></div>
             ) : (

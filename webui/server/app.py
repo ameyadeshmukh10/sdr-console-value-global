@@ -37,6 +37,7 @@ Design notes:
 """
 
 import base64
+import calendar
 import concurrent.futures
 import hashlib
 import hmac
@@ -3382,7 +3383,7 @@ def _age_days(researched_at):
         ts = time.strptime(researched_at, "%Y-%m-%dT%H:%M:%SZ")
     except (ValueError, TypeError):
         return None
-    return int((time.time() - time.mktime(ts) + time.timezone) // 86400)
+    return int((time.time() - calendar.timegm(ts)) // 86400)
 
 
 def _tech_status():
@@ -3426,8 +3427,16 @@ def signals_payload():
         except sqlite3.Error:
             rows = []
     for r in rows:
-        r["age_days"] = _age_days(r.get("researched_at"))
+        # Scan-created rows (tech/hiring/news backfills) never get researched_at,
+        # so fall back to updated_at — written by every upsert.
+        r["age_days"] = _age_days(r.get("researched_at") or r.get("updated_at"))
         r["fresh"] = r["age_days"] is not None and r["age_days"] < 90
+        # Winning ERP trigger (same membership logic as the Pipeline segments) —
+        # must run before news_detail/hiring_detail are popped below.
+        mems = _account_memberships(r)
+        top = mems[0] if mems and mems[0]["segment"] in ERP_TRIGGER_ORDER else None
+        r["trigger"] = top["segment"] if top else None
+        r["trigger_label"] = SEGMENT_LABELS.get(top["segment"]) if top else None
         r.pop("tech_detail", None)  # structured detections stay in the DB — heavy for a list
         r["tech_age_days"] = _age_days(r.get("tech_checked_at"))
         r["has_tech"] = bool(r.get("tech_signals"))
@@ -3470,7 +3479,8 @@ def signals_detail(domain):
     if row is None:
         return {"ok": False, "error": f"no signal cached for {domain}", "signal": None,
                 "domain": domain, "contacts": contacts}
-    row["age_days"] = _age_days(row.get("researched_at"))
+    # Same fallback as signals_payload: scan-created rows never get researched_at.
+    row["age_days"] = _age_days(row.get("researched_at") or row.get("updated_at"))
     row["fresh"] = row["age_days"] is not None and row["age_days"] < 90
     row["tech_age_days"] = _age_days(row.get("tech_checked_at"))
     row["has_tech"] = bool(row.get("tech_signals"))
