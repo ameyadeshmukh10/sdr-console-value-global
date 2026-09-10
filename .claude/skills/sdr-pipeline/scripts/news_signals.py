@@ -29,8 +29,9 @@ The five triggers (instruction sets user-approved 2026-09):
                      E-Business Suite at the account; otherwise recorded as
                      skipped (not an error).
 
-Each trigger is one Messages call with web search (NEWS_MAX_SEARCHES per call,
-default 4) returning a strict JSON verdict {found, score 0-100, headline,
+Each trigger is one Messages call with web search (per-trigger max_searches, 3-4,
+tuned from the 2026-09 live run; NEWS_MAX_SEARCHES overrides all of them when
+set) returning a strict JSON verdict {found, score 0-100, headline,
 summary, date, source_url, details}. Calls run in two waves so cross-referenced
 triggers see their upstream verdicts:
     wave 1: ma_carveout, erp_migration, ebs_performance   (concurrent)
@@ -203,6 +204,7 @@ Return ONLY one JSON object, no prose, no markdown fences:
 TRIGGERS = {
     "ma_carveout": {
         "label": "M&A carve-out",
+        "max_searches": 3,  # live run: found verdicts at median 2 searches; only 2/84 used a 4th
         "brief": """\
 # Trigger: M&A Carve-Out — an acquisition or divestiture announced in the LAST 90 DAYS
 Why it matters (context only, never quote it): when a company divests or acquires, the separated
@@ -259,6 +261,12 @@ running; generic "digital transformation" talk with no ERP program behind it.
     "license_audit": {
         "label": "License audit",
         "context_from": "ma_carveout",
+        # Deterministic backstop for the prompt's "never found below 55" rule:
+        # live data (2026-09, 1,262 accounts) showed 105 of 123 found verdicts in
+        # the weak 30-54 one-proxy band — segment filler, not outreach anchors.
+        "min_found_score": 55,
+        "max_searches": 3,  # live run: found at median 3; the 4th search fed the weak band
+
         "brief": """\
 # Trigger: Oracle License Audit exposure
 Why it matters (context only): when Oracle's audit clock starts, every database, module, and
@@ -276,16 +284,20 @@ Research signals (ANY of these raises the score):
 
 details to extract: {{"signals": ["<one line per signal actually found>"]}}
 
-Scoring: composite trigger. One weak signal alone = 30-50; two or more, or one strong direct signal
-(public Oracle-spend commentary, a fresh SAM hire) = 55-80; direct evidence of an active or announced
-Oracle audit = 80-95.
-DISQUALIFIERS (report found=false): no EBS and no broader Oracle footprint; a company clearly
-reducing Oracle to zero (already fully migrated off Oracle).
+Scoring: composite trigger with a HIGH bar. found=true requires TWO OR MORE independent signals, or
+ONE strong direct signal (public Oracle-spend/Java-licensing commentary, a fresh SAM hire, an
+Oracle usage assessment or audit-adjacent tender) = 55-80; direct evidence of an active or announced
+Oracle audit = 80-95. One weak proxy alone (company size, industry, generic recent M&A with no
+license implication) does NOT qualify — report found=false and name the near-miss in the summary.
+Never report found=true with a score below 55.
+DISQUALIFIERS (report found=false): a single weak proxy signal; no EBS and no broader Oracle
+footprint; a company clearly reducing Oracle to zero (already fully migrated off Oracle).
 """,
     },
     "ebs_oci": {
         "label": "EBS on OCI",
         "context_from": "erp_migration",
+        "max_searches": 3,  # live run: all 8 found verdicts needed ≤3 searches
         "brief": """\
 # Trigger: EBS lift-and-shift onto OCI (still running EBS, hosted on Oracle's cloud)
 Do NOT confuse these: Oracle OCI (Oracle Cloud Infrastructure) is just infrastructure that hosts an
@@ -315,6 +327,7 @@ unrelated to EBS (analytics, a website).
     "ebs_performance": {
         "label": "EBS performance",
         "requires_ebs": True,
+        "max_searches": 3,  # proxy-only trigger; rarely runs (EBS pre-condition)
         "brief": """\
 # Trigger: EBS performance pain (month-end close, table locks, batch overruns)
 Pre-condition, already verified: our deterministic technographic scan detected Oracle E-Business
@@ -574,6 +587,13 @@ def _research_trigger(trigger_id, company, domain, max_searches, tech_line=None,
         )
         out["web_searches"] = res.get("web_search_count", 0)
         out.update(classify_verdict(extract_json(res["text"])))
+        floor = TRIGGERS[trigger_id].get("min_found_score")
+        if floor and out["found"] and out["score"] < floor:
+            # The model ignored the found bar — downgrade deterministically so a
+            # weak verdict can never seed a segment.
+            out["summary"] = _truncate(
+                f"[below the {floor}-point found bar: {out['headline']}] {out['summary']}", 800)
+            out["found"], out["score"], out["headline"] = False, 0, ""
     except (AnthropicError, AnthropicJSONError) as exc:
         out["error"] = str(exc)[:300]
     except Exception as exc:  # noqa: BLE001 — one trigger never kills the scan
@@ -596,7 +616,16 @@ def detect_domain(domain, company=None, triggers=None, tech_line=None, ebs=None)
         return {"formatted": None, "triggers": {}, "error": f"invalid domain: {domain!r}",
                 "found_count": 0, "web_searches": 0, "duration_ms": 0, "model": None}
 
-    max_searches = max(1, _env_int("NEWS_MAX_SEARCHES", 4))
+    # Per-trigger search budget: TRIGGERS[..]["max_searches"] wins, then the
+    # global default of 4. NEWS_MAX_SEARCHES (when set) overrides everything —
+    # the explicit-operator escape hatch. Caps are tuned from the 2026-09 live
+    # run (1,262 accounts): found verdicts needed a 4th search only on
+    # erp_migration (median 4); ma_carveout found at median 2, ebs_oci at ≤3.
+    env_max = _env_int("NEWS_MAX_SEARCHES", 0)
+
+    def _max_searches(tid):
+        return max(1, env_max or TRIGGERS[tid].get("max_searches") or 4)
+
     wanted = enabled_triggers(triggers)
     t0 = time.monotonic()
     results = {}
@@ -624,7 +653,7 @@ def detect_domain(domain, company=None, triggers=None, tech_line=None, ebs=None)
             continue
         with ThreadPoolExecutor(max_workers=len(runnable)) as ex:
             futures = {
-                tid: ex.submit(_research_trigger, tid, company, host, max_searches,
+                tid: ex.submit(_research_trigger, tid, company, host, _max_searches(tid),
                                tech_line=tech_line,
                                prior=results.get(TRIGGERS[tid].get("context_from")))
                 for tid in runnable
@@ -734,7 +763,8 @@ def detect_and_store(domain, company=None, force=False, hubspot=None, triggers=N
         "web_searches": res["web_searches"],
         "duration_ms": res["duration_ms"],
         "model": res["model"],
-        "max_searches": max(1, _env_int("NEWS_MAX_SEARCHES", 4)),
+        "max_searches": _env_int("NEWS_MAX_SEARCHES", 0)
+        or {t: TRIGGERS[t].get("max_searches") or 4 for t in res["triggers"] if t in TRIGGERS},
         "hubspot": hs,
     }
     if composite is not None or comp_err is not None:
@@ -963,6 +993,10 @@ def self_test():
                                tech_line="ERP: Oracle E-Business Suite"))),
         ("system prompt warns against adopting a stale source's tense",
          "NEVER adopt a source's" in build_system(4)),
+        ("license_audit carries the 55-point found floor",
+         TRIGGERS["license_audit"].get("min_found_score") == 55
+         and "Never report found=true with a score below 55" in TRIGGERS["license_audit"]["brief"]
+         and not any(TRIGGERS[t].get("min_found_score") for t in TRIGGERS if t != "license_audit")),
     ]
     failed_names = [name for name, passed in checks if not passed]
     for name, passed in checks:
