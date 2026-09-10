@@ -17,14 +17,16 @@ const NO_HIRING = 'No open roles detected'
 const NO_NEWS = 'No ERP news signals detected'
 
 // Sortable header cell: click cycles ascending → descending → server default.
+// The control is a native button (keyboard-operable); aria-sort stays on the th.
 function SortTh({ label, k, sort, onSort, width }) {
   const active = sort?.key === k
   return (
-    <th style={{ width, cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}
-      onClick={() => onSort(k)}
-      aria-sort={active ? (sort.dir === 1 ? 'ascending' : 'descending') : undefined}
-      title={`Sort by ${label.toLowerCase()}`}>
-      {label}{active ? (sort.dir === 1 ? ' ▲' : ' ▼') : ''}
+    <th style={{ width, whiteSpace: 'nowrap' }}
+      aria-sort={active ? (sort.dir === 1 ? 'ascending' : 'descending') : undefined}>
+      <button type="button" className="th-sort" onClick={() => onSort(k)}
+        title={`Sort by ${label.toLowerCase()}`}>
+        {label}{active ? (sort.dir === 1 ? ' ▲' : ' ▼') : ''}
+      </button>
     </th>
   )
 }

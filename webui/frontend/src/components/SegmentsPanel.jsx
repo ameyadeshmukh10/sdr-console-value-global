@@ -173,7 +173,11 @@ export default function SegmentsPanel({ onChanged, onGeneration }) {
                   <thead><tr><th>Account</th><th>Contacts</th>{s.kind === 'trigger' && <th>Score</th>}<th>Signal</th></tr></thead>
                   <tbody>
                     {s.accounts.map((a) => (
-                      <tr key={a.domain} className="clickable" onClick={() => setOpenDomain(a.domain)}>
+                      <tr key={a.domain} className="clickable" tabIndex={0}
+                        onClick={() => setOpenDomain(a.domain)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpenDomain(a.domain) }
+                        }}>
                         <td>
                           <span className="mono">{a.domain}</span>
                           {a.company && <span className="muted" style={{ marginLeft: 8 }}>{a.company}</span>}

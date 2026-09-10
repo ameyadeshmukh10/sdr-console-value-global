@@ -128,6 +128,12 @@ label.field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; 
 
 /* Inline text-style button (disclosure toggles, reset links) */
 button.linklike { background: none; border: none; padding: 0; color: var(--accent, #0a7); font-weight: 600; cursor: pointer; }
+/* Sortable-header button: renders exactly like the th text it sits in */
+th button.th-sort {
+  background: none; border: none; padding: 0; border-radius: 0; cursor: pointer; user-select: none;
+  font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit;
+}
+th button.th-sort:hover { filter: none; color: var(--text); }
 button.linklike:hover { text-decoration: underline; }
 
 /* Pill tabs (SLA wizard steps) */
@@ -153,6 +159,7 @@ tbody tr:last-child td { border-bottom: none; }
 tbody tr:hover { background: var(--surface-hover); }
 tr.clickable { cursor: pointer; transition: background .12s; }
 tr.clickable:hover { background: var(--surface-hover); }
+tr.clickable:focus-visible { outline: 2px solid var(--jade); outline-offset: -2px; background: var(--surface-hover); }
 
 /* Badges — pill, brand-harmonized */
 .badge {

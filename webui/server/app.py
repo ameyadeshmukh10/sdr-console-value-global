@@ -3479,7 +3479,8 @@ def signals_detail(domain):
     if row is None:
         return {"ok": False, "error": f"no signal cached for {domain}", "signal": None,
                 "domain": domain, "contacts": contacts}
-    row["age_days"] = _age_days(row.get("researched_at"))
+    # Same fallback as signals_payload: scan-created rows never get researched_at.
+    row["age_days"] = _age_days(row.get("researched_at") or row.get("updated_at"))
     row["fresh"] = row["age_days"] is not None and row["age_days"] < 90
     row["tech_age_days"] = _age_days(row.get("tech_checked_at"))
     row["has_tech"] = bool(row.get("tech_signals"))
