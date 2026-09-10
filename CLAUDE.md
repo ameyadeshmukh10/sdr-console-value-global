@@ -280,35 +280,59 @@ triggers, via the Anthropic Messages API + server-side `web_search` (the same ch
   best-effort; `NEWS_HUBSPOT_WRITEBACK=0` kills it).
 - **Composite signal (2026-09):** when a scan FOUND ≥1 trigger, `detect_and_store` makes
   one extra no-web-search call (`compose_signal`) that synthesizes the verdicts + tech/
-  hiring context into the account's top-line `signal` (stored via `upsert_signal`, so
-  `researched_at`/`has_recent` populate and the Signals table/drawer Signal field is no
-  longer empty for scan-created rows). Never blanks an existing signal (found_count 0 =
-  no write); outcome recorded in `news_detail.composite`; `NEWS_COMPOSITE_SIGNAL=0` kills
-  it. Both prompts anchor today's date and forbid adopting a stale source's tense (a
-  past "projected go-live" is a completed event — the 2026-09 date-reasoning fix).
-- **Batched backfills (2026-09, default ON):** bulk runs (`backfill()` — the UI bulk
-  button, the intel job, the post-batch tail, CLI `--missing`) go through the
-  **Message Batches API**: 50% token cost, search fees unchanged; the two waves map to
-  two sequential batches (custom_id = `<trigger>:<index>`, never the domain — 64-char
-  cap), results classify through the same `_finish_verdict` path as sync, and the
-  finalize step (HubSpot write-back → composite → upserts) runs in a small thread
-  pool. `NEWS_BATCH=0` or `--sync` forces the old thread-pool path, which also handles
-  runs under `NEWS_BATCH_MIN` (3); knobs `NEWS_BATCH_POLL_S` (20) /
-  `NEWS_BATCH_TIMEOUT_S` (14400). The drawer's single-account "Research news" is
-  always synchronous. Coarse batch progress rides the job's `current` slot ("wave 1:
-  240/1048 requests done").
-- **Cost gotcha (load-bearing):** every non-skipped scan is 3-4 web-search calls per
-  researched trigger (~$10/1k searches + result tokens at the resolved model's rate) —
-  run first backfills with `--limit`, keep `NEWS_MODEL` pinned to a mid-tier model,
-  and remember the post-batch tail researches every new domain a batch touches. The
-  2026-09 run: 9,102 searches across 1,262 accounts, all on the accidental Opus 4.8
-  default. Per-verdict `usage` in `news_detail.triggers` now records real token spend —
-  check it before re-tuning models or caps. API credit exhaustion mid-backfill stores
-  `news_error` rows ("credit balance is too low"), which retry on the next run.
+  hiring context (re-read fresh post-scan) into the account's top-line `signal`. Stored
+  via **`upsert_composite_signal` — fill-only**: a fresh (<90d) generation-researched
+  signal always wins, `company_name` is never touched, `has_recent` derives from
+  non-proxy triggers. **Deliberate consequence:** the fresh `researched_at` makes
+  `generate_batch`'s default/SLA path reuse the composite as cached research (no new
+  web search) for 90 days — the composite prompt therefore writes neutral factual
+  research prose, never SDR meta-commentary; the erp-trigger path is unaffected.
+  Failures/empty outputs are stderr-logged and recorded in `news_detail.composite`
+  ({ok, stored, error}); a max_tokens-truncated output is never stored;
+  `NEWS_COMPOSITE_SIGNAL=0` kills it. Both prompts anchor today's date (UTC — matches
+  the stored clocks) and forbid adopting a stale source's tense (a past "projected
+  go-live" is a completed event — the 2026-09 date-reasoning fix).
+- **Verdict guards (`_apply_verdict_guards`):** deterministic backstops after
+  `classify_verdict`, sync and batch and stored-data alike — license_audit found
+  floor 55, ebs_performance score cap 75, ma_carveout 90-day recency window (month
+  granularity). Downgrades keep the evidence in `details` (`below_found_bar` /
+  `outside_window`) with only a short summary marker. **Migrations for
+  already-stored rows:** `news_signals.py --refloor` (DB-only, preserves freshness
+  clocks) and `--recompose` (composites for stored found rows; API spend, use
+  `--limit`).
+- **Batched backfills (2026-09, opt-in):** the deliberate bulk paths — the UI bulk
+  "Research news" button and CLI `--missing` — go through the **Message Batches
+  API** (50% token cost, search fees unchanged) via `backfill(batched=True)`; the
+  intel job and the post-batch tail stay synchronous (they sit on interactive /
+  fire-and-forget paths where hour-scale batch latency is wrong). The two waves map
+  to two sequential batches (custom_id `<trigger>_<index>` — the API allows only
+  `[A-Za-z0-9_-]`, never the domain); results classify through the same
+  `_finish_verdict` path as sync. Durability: every submitted batch id is persisted
+  to `data/outreach/news_batches.json` before polling, poll errors retry until the
+  deadline instead of failing the run, a failed/timed-out wave degrades to per-row
+  error verdicts (retried next run) instead of discarding the other wave, and a
+  timeout best-effort-cancels the batch. The finalize step (HubSpot write-back →
+  composite → upserts, per-domain freshness re-check) runs in its own thread pool
+  (`NEWS_FINALIZE_WORKERS`, default 4). Knobs: `NEWS_BATCH` (0 disables batch even
+  for opt-in callers), `NEWS_BATCH_MIN` (3), `NEWS_BATCH_POLL_S` (20),
+  `NEWS_BATCH_TIMEOUT_S` (86400 — the API guarantees results within 24h). Coarse
+  progress rides the job's `current` slot ("wave 1: 240/1048 requests done").
+- **Cost gotcha (load-bearing):** every non-skipped scan is up to 6 API calls (5
+  research × 3-4 searches, ≤16 total, + 1 composite) — run first backfills with
+  `--limit`, keep `NEWS_MODEL` pinned to a mid-tier model, and remember the
+  post-batch tail researches every new domain a batch touches. The 2026-09 run:
+  9,102 searches across 1,262 accounts, all on the accidental Opus 4.8 default.
+  Per-verdict `usage` in `news_detail.triggers` records raw token counts
+  (`input/output/cache_*` + `web_search_requests`; batched rows bill tokens at 50%
+  of those numbers — `detail.batched` marks them). API credit exhaustion
+  mid-backfill stores `news_error` rows ("credit balance is too low"), which retry
+  on the next run.
 - **Copy consumer (2026-09):** the gated approval flow (section below) consumes the
   verdicts — contacts approved through a trigger segment generate via
   `generate_batch.py`'s **erp-trigger** path, which anchors email 1 on the stored
-  verdict. Autonomous (SLA) generation still ignores `news_signals`.
+  verdict. Autonomous (SLA) generation never reads the `news_signals` column or the
+  erp-trigger path — but since 2026-09 it DOES reach news research indirectly: a fresh
+  composite in `signal` is reused as its cached research (see the composite bullet).
 
 ## Gated approval flow — segments → review → enroll (added 2026-09)
 

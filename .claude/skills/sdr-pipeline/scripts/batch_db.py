@@ -454,6 +454,37 @@ def upsert_signal(conn, domain, company_name, signal, has_recent, model=None):
     conn.commit()
 
 
+def upsert_composite_signal(conn, domain, signal, model=None, has_recent=True):
+    """Store the news-composite signal WITHOUT clobbering fresher research.
+    Unlike upsert_signal (the batch-generation writer, which deliberately
+    overwrites with its own verified research), this writes signal/has_recent/
+    researched_at/model ONLY when the row has no fresh signal — an existing
+    generation-researched signal inside its 90-day window always wins — and it
+    NEVER touches company_name. Returns True when the write happened."""
+    row = get_signal(conn, domain)
+    if row and (row.get("signal") or "").strip() and signal_fresh(row):
+        return False
+    conn.execute("""
+        INSERT INTO account_signals (domain, signal, has_recent, researched_at, model, updated_at)
+        VALUES (?,?,?,?,?,?)
+        ON CONFLICT(domain) DO UPDATE SET
+          signal=excluded.signal, has_recent=excluded.has_recent,
+          researched_at=excluded.researched_at, model=excluded.model,
+          updated_at=excluded.updated_at
+    """, (domain, signal, 1 if has_recent else 0, now(), model, now()))
+    conn.commit()
+    return True
+
+
+def update_news_verdicts(conn, domain, news_signals, news_detail):
+    """Correct a stored scan's verdicts IN PLACE (the --refloor migration):
+    rewrites news_signals + news_detail while PRESERVING news_checked_at /
+    updated_at — a correction is not a re-scan and must not extend freshness."""
+    conn.execute("UPDATE account_signals SET news_signals=?, news_detail=? WHERE domain=?",
+                 (news_signals, news_detail, domain))
+    conn.commit()
+
+
 def all_signals(conn):
     return [dict(r) for r in conn.execute(
         "SELECT * FROM account_signals ORDER BY updated_at DESC")]
