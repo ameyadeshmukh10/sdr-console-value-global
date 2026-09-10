@@ -85,10 +85,11 @@ backfill.
 import argparse
 import json
 import os
+import re
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -625,7 +626,8 @@ def compose_signal(company, domain, trigger_results, tech_line=None, hiring_line
     stderr-logged (the tech/hiring write-back house pattern) so a
     systematically failing composite is visible in a backfill's output."""
     try:
-        res = _client().complete(
+        model = (os.environ.get("NEWS_COMPOSITE_MODEL") or "").strip() or None
+        res = _client(model).complete(
             COMPOSITE_SYSTEM.format(today=_utcnow().strftime("%B %d, %Y")),
             build_composite_user(company, domain, trigger_results,
                                  tech_line=tech_line, hiring_line=hiring_line),
@@ -666,20 +668,123 @@ def _ebs_detected(row):
 
 
 # ---- research ---------------------------------------------------------------
-_CLIENT = None
+_CLIENTS = {}
 _CLIENT_LOCK = threading.Lock()
 
 
-def _client():
-    """Lazy shared AnthropicClient (NEWS_MODEL wins over CLAUDE_MODEL)."""
-    global _CLIENT
+def _client(model=None):
+    """Lazy per-model AnthropicClient cache. model=None resolves NEWS_MODEL →
+    CLAUDE_MODEL → the client default; a per-trigger model (see _trigger_model)
+    gets its own cached instance so one scan can mix model tiers."""
+    key = (model or "").strip() or (os.environ.get("NEWS_MODEL") or "").strip() or None
     with _CLIENT_LOCK:
-        if _CLIENT is None:
+        if key not in _CLIENTS:
             if str(AI_SDR_SCRIPTS) not in sys.path:
                 sys.path.insert(0, str(AI_SDR_SCRIPTS))
             from anthropic_client import AnthropicClient  # noqa: E402 — lazy: needs API key
-            _CLIENT = AnthropicClient(model=(os.environ.get("NEWS_MODEL") or "").strip() or None)
-        return _CLIENT
+            _CLIENTS[key] = AnthropicClient(model=key)
+        return _CLIENTS[key]
+
+
+def _trigger_model(trigger_id):
+    """Model for one trigger's research call: NEWS_MODEL_<TRIGGER_ID> env (e.g.
+    NEWS_MODEL_LICENSE_AUDIT=claude-haiku-4-5 — set per trigger to test cheaper
+    tiers, no code change) → TRIGGERS[..]["model"] → None (the _client default
+    chain, NEWS_MODEL → CLAUDE_MODEL)."""
+    return ((os.environ.get(f"NEWS_MODEL_{trigger_id.upper()}") or "").strip()
+            or TRIGGERS[trigger_id].get("model") or None)
+
+
+def _usage_compact(usage):
+    """The billing-relevant integers from a Messages usage object, including
+    the billed web-search request count (usage.server_tool_use — the
+    authoritative number behind the ~$10/1k search fee; the block-count
+    `web_searches` field is only a proxy). Note: token counts are RAW — batch
+    rows bill at 50% of them (detail.batched marks those)."""
+    keep = ("input_tokens", "output_tokens", "cache_read_input_tokens",
+            "cache_creation_input_tokens")
+    out = {k: usage[k] for k in keep if isinstance((usage or {}).get(k), int)}
+    stu = (usage or {}).get("server_tool_use")
+    if isinstance(stu, dict) and isinstance(stu.get("web_search_requests"), int):
+        out["web_search_requests"] = stu["web_search_requests"]
+    return out
+
+
+def _finish_verdict(trigger_id, out, res):
+    """Classify one completed Messages response (sync or batch result) into the
+    verdict dict `out` in place: search/usage metadata, JSON verdict, and the
+    deterministic verdict guards (found floor / score cap / recency window).
+    Raises on unparseable output — callers wrap."""
+    out["web_searches"] = res.get("web_search_count", 0)
+    usage = _usage_compact(res.get("usage"))
+    if usage:
+        out["usage"] = usage
+    out.update(classify_verdict(extract_json_lazy(res["text"])))
+    _apply_verdict_guards(trigger_id, out)
+
+
+def extract_json_lazy(text):
+    if str(AI_SDR_SCRIPTS) not in sys.path:
+        sys.path.insert(0, str(AI_SDR_SCRIPTS))
+    from anthropic_client import extract_json  # noqa: E402
+    return extract_json(text)
+
+
+def _blank_verdict(trigger_id, model=None):
+    out = {"label": TRIGGERS[trigger_id]["label"], "found": False, "score": 0,
+           "headline": "", "summary": "", "date": "", "source_url": "",
+           "details": {}, "error": None, "web_searches": 0, "duration_ms": 0}
+    if model:
+        out["model"] = model
+    return out
+
+
+def _skip_reason(tid, ebs):
+    """The ebs_performance pre-condition — ONE implementation for the sync and
+    batch paths (the stored/rendered skip strings must never drift apart)."""
+    if tid != "ebs_performance":
+        return None
+    if ebs is None:
+        return "tech scan has not run (Oracle EBS pre-condition unknown)"
+    if not ebs:
+        return "Oracle EBS not detected by the tech scan"
+    return None
+
+
+def _scan_models(results):
+    """The model(s) that actually researched this scan, derived from the
+    per-verdict records — never guessed from the default client (which is
+    wrong the moment per-trigger models are in play, and constructing it just
+    to read .model would cache an unused client)."""
+    models = sorted({r.get("model") for r in results.values()
+                     if isinstance(r, dict) and "skipped" not in r and r.get("model")})
+    if not models:
+        return None
+    return models[0] if len(models) == 1 else ", ".join(models)
+
+
+def _assemble_scan(results, duration_ms=None, batched=False):
+    """The canonical per-domain scan result built from classified verdicts —
+    ONE definition of "what a completed scan looks like", shared by
+    detect_domain (sync) and the batched backfill. `error` is set — and
+    formatted None — ONLY when every researched trigger errored (a partial
+    scan is a definitive answer)."""
+    results = {tid: results[tid] for tid in TRIGGERS if tid in results}
+    researched = [r for r in results.values() if "skipped" not in r]
+    errors = [r for r in researched if r.get("error")]
+    error = None
+    formatted = format_line(results)
+    if researched and len(errors) == len(researched):
+        error = "; ".join(f"{r.get('label') or '?'}: {r['error']}" for r in errors)[:500]
+        formatted = None
+    out = {"formatted": formatted, "triggers": results, "error": error,
+           "found_count": sum(1 for r in results.values()
+                              if isinstance(r, dict) and r.get("found")),
+           "web_searches": sum(r.get("web_searches", 0) for r in researched),
+           "duration_ms": duration_ms, "model": _scan_models(results)}
+    if batched:
+        out["batched"] = True
+    return out
 
 
 def _research_trigger(trigger_id, company, domain, max_searches, tech_line=None, prior=None):
@@ -688,22 +793,21 @@ def _research_trigger(trigger_id, company, domain, max_searches, tech_line=None,
     set (never raises)."""
     if str(AI_SDR_SCRIPTS) not in sys.path:
         sys.path.insert(0, str(AI_SDR_SCRIPTS))
-    from anthropic_client import extract_json, AnthropicError, AnthropicJSONError  # noqa: E402
+    from anthropic_client import AnthropicError, AnthropicJSONError  # noqa: E402
     t0 = time.monotonic()
-    out = {"label": TRIGGERS[trigger_id]["label"], "found": False, "score": 0,
-           "headline": "", "summary": "", "date": "", "source_url": "",
-           "details": {}, "error": None, "web_searches": 0, "duration_ms": 0}
+    client = None
+    out = _blank_verdict(trigger_id)
     try:
-        res = _client().complete(
+        client = _client(_trigger_model(trigger_id))
+        out["model"] = client.model
+        res = client.complete(
             build_system(max_searches),
             build_user(trigger_id, company, domain, max_searches,
                        tech_line=tech_line, prior=prior),
             use_web_search=True, max_web_searches=max_searches,
             max_tokens=MAX_TOKENS, timeout=CALL_TIMEOUT,
         )
-        out["web_searches"] = res.get("web_search_count", 0)
-        out.update(classify_verdict(extract_json(res["text"])))
-        _apply_verdict_guards(trigger_id, out)
+        _finish_verdict(trigger_id, out, res)
     except (AnthropicError, AnthropicJSONError) as exc:
         out["error"] = str(exc)[:300]
     except Exception as exc:  # noqa: BLE001 — one trigger never kills the scan
@@ -730,21 +834,12 @@ def detect_domain(domain, company=None, triggers=None, tech_line=None, ebs=None)
     t0 = time.monotonic()
     results = {}
 
-    def _skip(tid):
-        if tid != "ebs_performance":
-            return None
-        if ebs is None:
-            return "tech scan has not run (Oracle EBS pre-condition unknown)"
-        if not ebs:
-            return "Oracle EBS not detected by the tech scan"
-        return None
-
     for wave in TRIGGER_WAVES:
         runnable = []
         for tid in wave:
             if tid not in wanted:
                 continue
-            reason = _skip(tid)
+            reason = _skip_reason(tid, ebs)
             if reason:
                 results[tid] = {"label": TRIGGERS[tid]["label"], "skipped": reason}
             else:
@@ -761,25 +856,7 @@ def detect_domain(domain, company=None, triggers=None, tech_line=None, ebs=None)
             for tid, fut in futures.items():
                 results[tid] = fut.result()
 
-    # re-key in canonical order so detail JSON (and the drawer) reads stably
-    results = {tid: results[tid] for tid in TRIGGERS if tid in results}
-    researched = [r for r in results.values() if "skipped" not in r]
-    errors = [r for r in researched if r.get("error")]
-    error = None
-    formatted = format_line(results)
-    if researched and len(errors) == len(researched):
-        error = "; ".join(f"{r['label']}: {r['error']}" for r in errors)[:500]
-        formatted = None
-
-    model = None
-    try:
-        model = _CLIENT.model if _CLIENT else None
-    except Exception:  # noqa: BLE001
-        pass
-    return {"formatted": formatted, "triggers": results, "error": error,
-            "found_count": sum(1 for r in results.values() if r.get("found")),
-            "web_searches": sum(r.get("web_searches", 0) for r in researched),
-            "duration_ms": int((time.monotonic() - t0) * 1000), "model": model}
+    return _assemble_scan(results, duration_ms=int((time.monotonic() - t0) * 1000))
 
 
 # ---- store + orchestrate -----------------------------------------------------
@@ -839,9 +916,15 @@ def detect_and_store(domain, company=None, force=False, hubspot=None, triggers=N
     res = detect_domain(host, company=company, triggers=triggers,
                         tech_line=(row or {}).get("tech_signals"),
                         ebs=_ebs_detected(row))
+    return _store_scan(host, company, res, hubspot)
 
-    # HubSpot write-back BEFORE the upsert (no DB connection held across the
-    # HTTP call) so its outcome persists into news_detail for the drawer.
+
+def _store_scan(host, company, res, hubspot):
+    """Persist one completed scan `res` (the detect_domain shape) — HubSpot
+    write-back, composite signal, detail JSON, upserts. Shared by the sync
+    path (detect_and_store) and the batched backfill; network calls happen
+    BEFORE any DB connection is opened. The row is re-read here (never trusted
+    from before the scan): research blocks for minutes sync and hours batched."""
     hs = None
     if res["formatted"] is not None:
         enabled = _flag("NEWS_HUBSPOT_WRITEBACK", True) if hubspot is None else bool(hubspot)
@@ -878,6 +961,16 @@ def detect_and_store(domain, company=None, force=False, hubspot=None, triggers=N
                          if t in TRIGGERS and isinstance(r, dict) and "skipped" not in r},
         "hubspot": hs,
     }
+    if res.get("batched"):
+        detail["batched"] = True
+    # The model that WROTE the composite (NEWS_COMPOSITE_MODEL chain) — never
+    # the research model(s): the two diverge the moment either override is set.
+    comp_model = None
+    if composite:
+        try:
+            comp_model = _client((os.environ.get("NEWS_COMPOSITE_MODEL") or "").strip() or None).model
+        except Exception:  # noqa: BLE001
+            pass
     conn = _db()
     try:
         # The composite write goes FIRST (fill-only, never clobbers a fresh
@@ -887,7 +980,7 @@ def detect_and_store(domain, company=None, force=False, hubspot=None, triggers=N
         if composite:
             try:
                 stored_composite = db.upsert_composite_signal(
-                    conn, host, composite, model=res["model"],
+                    conn, host, composite, model=comp_model,
                     has_recent=any(isinstance(r, dict) and r.get("found")
                                    for t, r in res["triggers"].items()
                                    if t != "ebs_performance"))
@@ -896,7 +989,8 @@ def detect_and_store(domain, company=None, force=False, hubspot=None, triggers=N
                 log(f"composite store for {host} failed: {exc}")
         if res["found_count"] > 0 and _flag("NEWS_COMPOSITE_SIGNAL", True):
             detail["composite"] = {"ok": composite is not None and comp_err is None,
-                                   "stored": stored_composite, "error": comp_err}
+                                   "stored": stored_composite, "error": comp_err,
+                                   "model": comp_model}
         db.upsert_news_signals(conn, host, res["formatted"],
                                news_detail=json.dumps(detail, ensure_ascii=False),
                                news_error=res["error"], company_name=company)
@@ -955,14 +1049,288 @@ def hubspot_writeback(domain, trigger_results):
         return {"ok": False, "error": str(exc)[:300]}
 
 
+# ---- batched research (Message Batches API — 50% token cost) -----------------
+# The deliberate bulk paths (UI bulk "Research news" button, CLI --missing)
+# OPT IN via backfill(batched=True): tokens bill at half price, web-search fees
+# are unchanged. Interactive/fire-and-forget callers (the intel job, the
+# post-batch tail, the drawer) stay synchronous — batch latency is usually
+# under an hour but only guaranteed within 24h. Durability: every submitted
+# batch id is persisted to data/outreach/news_batches.json BEFORE polling
+# (results stay fetchable for 29 days — a redeploy mid-poll must never lose
+# the only copy of a billed batch's id), poll errors retry until the deadline,
+# and a failed/timed-out wave degrades to per-row error verdicts (stored and
+# retried next run) instead of discarding the other wave's paid results.
+_LEDGER_LOCK = threading.Lock()
+
+
+def _batch_ledger_path():
+    return db.PROJECT_ROOT / "data" / "outreach" / "news_batches.json"
+
+
+def _record_batch(bid, label, status, extra=None):
+    """Best-effort durable ledger of submitted news batches. Never raises —
+    the ledger must never fail a run."""
+    if not bid:
+        return
+    try:
+        with _LEDGER_LOCK:
+            path = _batch_ledger_path()
+            try:
+                data = json.loads(path.read_text()) if path.is_file() else {}
+            except (ValueError, OSError):
+                data = {}
+            entry = data.get(bid) or {"batch_id": bid, "created_at": db.now()}
+            entry.update({"label": label, "status": status, "updated_at": db.now()})
+            entry.update(extra or {})
+            data[bid] = entry
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, indent=1))
+            tmp.replace(path)
+    except Exception as exc:  # noqa: BLE001
+        log(f"batch ledger write failed: {exc}")
+
+
+def _batch_verdict_from_result(tid, result, model):
+    """One batch result line → the same verdict shape _research_trigger emits."""
+    out = _blank_verdict(tid, model=model)
+    try:
+        if (result or {}).get("type") == "succeeded":
+            if str(AI_SDR_SCRIPTS) not in sys.path:
+                sys.path.insert(0, str(AI_SDR_SCRIPTS))
+            from anthropic_client import parse_message  # noqa: E402
+            _finish_verdict(tid, out, parse_message(result["message"]))
+        else:
+            err = (result or {}).get("error") or {}
+            out["error"] = f"batch {((result or {}).get('type') or 'missing')}: " \
+                           f"{json.dumps(err)[:220]}"
+    except Exception as exc:  # noqa: BLE001 — one bad result never kills the run
+        out["error"] = f"{type(exc).__name__}: {exc}"[:300]
+    return out
+
+
+def _wave_error_verdicts(idx_map, msg):
+    """Every request of a wave as an error verdict — stored per row, so the
+    scan records the failure and retries next run instead of vanishing."""
+    out = {}
+    for cid, (tid, _plan, model) in idx_map.items():
+        v = _blank_verdict(tid, model=model)
+        v["error"] = msg[:300]
+        out[cid] = v
+    return out
+
+
+def _run_batch_wave(reqs, idx_map, phase, label):
+    """Submit one wave's requests, poll to completion, and classify every line.
+    Returns {custom_id: verdict}; a request the results file never mentions
+    gets an errored verdict (never silently dropped). NEVER raises after the
+    submit: the batch id is persisted to the ledger first, poll errors retry
+    until the deadline (a billed batch must not be abandoned over a hiccup),
+    and a timeout best-effort-cancels and degrades to error verdicts."""
+    client = _client()
+    batch = client.create_batch(reqs)
+    bid = batch.get("id") or ""
+    _record_batch(bid, label, "submitted", {"requests": len(reqs)})
+    log(f"{label}: batch {bid} submitted ({len(reqs)} requests)")
+    poll = max(5, _env_int("NEWS_BATCH_POLL_S", 20))
+    # Default matches the API's own guarantee (results within 24h).
+    deadline = time.monotonic() + max(300, _env_int("NEWS_BATCH_TIMEOUT_S", 86400))
+    while batch.get("processing_status") != "ended":
+        if time.monotonic() > deadline:
+            try:
+                client.cancel_batch(bid)
+                _record_batch(bid, label, "cancel_requested")
+            except Exception as exc:  # noqa: BLE001
+                log(f"{label}: cancel of batch {bid} failed: {exc}")
+                _record_batch(bid, label, "timed_out")
+            return _wave_error_verdicts(
+                idx_map, f"{label}: batch {bid} timed out (NEWS_BATCH_TIMEOUT_S) — id "
+                         "persisted in data/outreach/news_batches.json")
+        time.sleep(poll)
+        try:
+            batch = client.get_batch(bid)
+        except Exception as exc:  # noqa: BLE001 — a poll hiccup must never abandon a billed batch
+            log(f"{label}: poll of batch {bid} failed ({exc}) — retrying")
+            continue
+        counts = batch.get("request_counts") or {}
+        finished = sum(counts.get(k, 0) for k in ("succeeded", "errored", "canceled", "expired"))
+        if phase:
+            try:
+                phase(f"{label}: {finished}/{len(reqs)} requests done (batch {bid})")
+            except Exception:  # noqa: BLE001 — phase is cosmetic
+                pass
+    results_url = batch.get("results_url")
+    if not results_url:
+        _record_batch(bid, label, "ended_without_results_url")
+        return _wave_error_verdicts(idx_map, f"{label}: batch {bid} ended without a results_url")
+    _record_batch(bid, label, "ended")
+    verdicts = {}
+    try:
+        for line in client.get_batch_results(results_url):
+            cid = line.get("custom_id") or ""
+            if cid in idx_map:
+                tid, _plan, model = idx_map[cid]
+                verdicts[cid] = _batch_verdict_from_result(tid, line.get("result"), model)
+    except Exception as exc:  # noqa: BLE001 — results stay fetchable for 29 days; degrade
+        log(f"{label}: fetching results of batch {bid} failed: {exc}")
+        _record_batch(bid, label, "results_fetch_failed", {"error": str(exc)[:300]})
+        for cid, missing in _wave_error_verdicts(
+                idx_map, f"batch {bid}: results fetch failed: {exc}").items():
+            verdicts.setdefault(cid, missing)
+        return verdicts
+    for cid, (tid, _plan, model) in idx_map.items():
+        if cid not in verdicts:
+            v = _blank_verdict(tid, model=model)
+            v["error"] = f"batch {bid}: no result line returned"
+            verdicts[cid] = v
+    _record_batch(bid, label, "collected")
+    return verdicts
+
+
+def _backfill_batched(items, workers, force, hubspot, progress, phase, triggers):
+    """The batched twin of the sync backfill loop: same freshness rule, same
+    stored shapes, same summary. items = [(domain, company|None)]."""
+    wanted = enabled_triggers(triggers)
+    summary = {"total": len(items), "detected": 0, "skipped": 0, "errors": 0,
+               "hubspot_ok": 0, "hubspot_missing": 0, "batched": True}
+    done = [0]
+
+    def _tick(domain, res):
+        done[0] += 1
+        if res.get("error_exc") or res.get("news_error"):
+            summary["errors"] += 1
+        elif res.get("skipped"):
+            summary["skipped"] += 1
+        else:
+            summary["detected"] += 1
+        hs = res.get("hubspot") or {}
+        if hs.get("ok"):
+            summary["hubspot_ok"] += 1
+        elif hs.get("reason") == "no_company":
+            summary["hubspot_missing"] += 1
+        if progress:
+            try:
+                progress(done[0], len(items), domain, res)
+            except Exception:  # noqa: BLE001 — progress is cosmetic
+                pass
+
+    # Plan pass: same normalization + freshness skip as detect_and_store, plus
+    # the row context (tech line, EBS pre-condition) every later step needs,
+    # and the news_checked_at snapshot the finalize freshness re-check uses.
+    refresh_days = _env_float("NEWS_REFRESH_DAYS", 30)
+    plans = []
+    conn = _db()
+    try:
+        for idx, (raw, c) in enumerate(items):
+            d = _clean_domain(raw)
+            if not d:
+                _tick(str(raw), {"error_exc": f"invalid domain: {raw!r}"})
+                continue
+            row = db.get_signal(conn, d)
+            if (row and not force and row.get("news_signals") is not None
+                    and db.news_fresh(row, days=refresh_days)):
+                _tick(d, {"skipped": True})
+                continue
+            plans.append({"idx": idx, "domain": d,
+                          "company": c or (row or {}).get("company_name"),
+                          "news_checked_at": (row or {}).get("news_checked_at"),
+                          "tech_line": (row or {}).get("tech_signals"),
+                          "ebs": _ebs_detected(row), "results": {}})
+    finally:
+        conn.close()
+    if not plans:
+        return summary
+
+    # Per-trigger client/budget/system resolved ONCE per wave, not per plan —
+    # 1,262 plans × 3 triggers would otherwise take the client lock and
+    # re-format the system prompt ~3,800 times for identical values.
+    for wave_no, wave in enumerate(TRIGGER_WAVES, start=1):
+        per_trigger = {}
+        for tid in wave:
+            if tid in wanted:
+                ms = _max_searches(tid)
+                per_trigger[tid] = (_client(_trigger_model(tid)), ms, build_system(ms))
+        reqs, idx_map = [], {}
+        for plan in plans:
+            for tid in wave:
+                if tid not in wanted:
+                    continue
+                reason = _skip_reason(tid, plan["ebs"])
+                if reason:
+                    plan["results"][tid] = {"label": TRIGGERS[tid]["label"], "skipped": reason}
+                    continue
+                client, ms, system = per_trigger[tid]
+                # custom_id: the API allows only [A-Za-z0-9_-]{1,64} — never a
+                # domain (dots), never a colon.
+                cid = f"{tid}_{plan['idx']}"
+                reqs.append({"custom_id": cid, "params": client.build_body(
+                    system,
+                    build_user(tid, plan["company"], plan["domain"], ms,
+                               tech_line=plan["tech_line"],
+                               prior=plan["results"].get(TRIGGERS[tid].get("context_from"))),
+                    use_web_search=True, max_web_searches=ms,
+                    max_tokens=MAX_TOKENS, cache_ttl="1h")})
+                idx_map[cid] = (tid, plan, client.model)
+        if not reqs:
+            continue
+        try:
+            verdicts = _run_batch_wave(reqs, idx_map, phase, f"wave {wave_no}")
+        except Exception as exc:  # noqa: BLE001 — a wave-2 submit failure must
+            # never discard wave 1's paid results: degrade to error verdicts
+            # (stored per row, retried next run) and carry on to the finalize.
+            log(f"wave {wave_no}: submit failed: {exc}")
+            verdicts = _wave_error_verdicts(idx_map, f"wave {wave_no} submit failed: {exc}")
+        for cid, verdict in verdicts.items():
+            tid, plan, _model = idx_map[cid]
+            plan["results"][tid] = verdict
+
+    # Finalize per domain (freshness re-check → assemble → store). This step is
+    # network-bound cleanup (HubSpot write-back + composite), NOT research
+    # spend, so it gets its own pool: NEWS_FINALIZE_WORKERS (default 4 — at 2,
+    # a 1,262-domain run trailed the finished batch by ~an hour).
+    def _finalize(plan):
+        try:
+            conn = _db()
+            try:
+                current = db.get_signal(conn, plan["domain"])
+            finally:
+                conn.close()
+            if ((current or {}).get("news_checked_at") or None) != plan["news_checked_at"]:
+                # A newer scan landed while the batch ran (drawer click,
+                # another job) — never overwrite it with these older verdicts,
+                # and never bump its freshness clock.
+                return plan["domain"], {"domain": plan["domain"], "skipped": True,
+                                        "reason": "newer scan landed mid-batch"}
+            res = _assemble_scan(plan["results"], batched=True)
+            return plan["domain"], _store_scan(plan["domain"], plan["company"], res, hubspot)
+        except Exception as exc:  # noqa: BLE001 — one bad domain never kills the run
+            return plan["domain"], {"domain": plan["domain"], "error_exc": str(exc)[:300]}
+
+    fin_workers = max(1, _env_int("NEWS_FINALIZE_WORKERS", 0) or max(int(workers), 4))
+    with ThreadPoolExecutor(max_workers=fin_workers) as ex:
+        for fut in as_completed([ex.submit(_finalize, p) for p in plans]):
+            d, res = fut.result()
+            _tick(d, res)
+    return summary
+
+
 # ---- bulk ---------------------------------------------------------------------
 def backfill(domains=None, stale_days=None, limit=None, workers=2, force=False,
-             hubspot=None, progress=None, triggers=None):
-    """Research many domains (ThreadPoolExecutor; keep workers small — each
-    scan already fans out to up to 3 concurrent web-search calls, and every
-    non-skipped scan is real API spend). domains=None pulls the never-scanned
-    (plus stale, when stale_days is set) from account_signals. Returns {total,
-    detected, skipped, errors, hubspot_ok, hubspot_missing}."""
+             hubspot=None, progress=None, triggers=None, batched=None, phase=None):
+    """Research many domains. batched=True OPTS IN to the Message Batches API
+    (50% token cost; hour-scale latency, guaranteed within 24h) — the UI bulk
+    button and CLI --missing pass it; batched=None/False runs the synchronous
+    thread pool, which also handles opt-in runs smaller than NEWS_BATCH_MIN
+    (default 3) and NEWS_BATCH=0 (the global kill switch). Batch-by-default
+    was reverted deliberately: the intel job sits on the interactive segment
+    gate and the post-batch tail is fire-and-forget — hour-scale latency is
+    wrong for both. Sync mode: keep workers small, each scan already fans out
+    to up to 3 concurrent web-search calls and every non-skipped scan is real
+    API spend (in batch mode `workers` only sizes nothing — the finalize pool
+    is NEWS_FINALIZE_WORKERS). domains=None pulls the never-scanned (plus
+    stale, when stale_days is set) from account_signals. `phase` (optional)
+    receives coarse batch-progress strings. Returns {total, detected, skipped,
+    errors, hubspot_ok, hubspot_missing, batched?}."""
     ok, reason = news_available()
     if not ok:
         raise RuntimeError(f"news research unavailable: {reason}")
@@ -983,6 +1351,10 @@ def backfill(domains=None, stale_days=None, limit=None, workers=2, force=False,
                "hubspot_ok": 0, "hubspot_missing": 0}
     if not items:
         return summary
+
+    if (batched and _flag("NEWS_BATCH", True)
+            and len(items) >= max(1, _env_int("NEWS_BATCH_MIN", 3))):
+        return _backfill_batched(items, workers, force, hubspot, progress, phase, triggers)
 
     def work(item):
         d, c = item
@@ -1110,7 +1482,7 @@ def recompose_stored(limit=None, force=False):
             continue
         model = None
         try:
-            model = _client().model
+            model = _client((os.environ.get("NEWS_COMPOSITE_MODEL") or "").strip() or None).model
         except Exception:  # noqa: BLE001
             pass
         conn = _db()
@@ -1185,6 +1557,38 @@ def self_test():
         except Exception as exc:  # noqa: BLE001
             prompt_errors.append(f"{tid}: {exc}")
 
+    # Per-trigger model + search-cap resolution (env saved/restored)
+    # Save/clear EVERY env knob the assertions read — an operator's ambient
+    # .env value (any NEWS_MODEL_<TID>, NEWS_MAX_SEARCHES) must never fail —
+    # or be destroyed by — the offline gate.
+    saved = {k: os.environ.get(k) for k in
+             ["NEWS_MAX_SEARCHES", "NEWS_MODEL"]
+             + [f"NEWS_MODEL_{t.upper()}" for t in TRIGGERS]}
+    try:
+        for k in saved:
+            os.environ.pop(k, None)
+        os.environ["NEWS_MODEL_MA_CARVEOUT"] = "claude-haiku-4-5"
+        tm_env = _trigger_model("ma_carveout")
+        tm_default = _trigger_model("erp_migration")
+        os.environ["NEWS_MAX_SEARCHES"] = "2"
+        ms_env = _max_searches("erp_migration")
+        os.environ.pop("NEWS_MAX_SEARCHES")
+        ms_spec = (_max_searches("ma_carveout"), _max_searches("erp_migration"))
+    finally:
+        for k, v in saved.items():
+            (os.environ.__setitem__(k, v) if v is not None else os.environ.pop(k, None))
+
+    # Batch result lines classify exactly like the sync path (offline: no key)
+    bv_ok = _batch_verdict_from_result("ma_carveout", {"type": "succeeded", "message": {
+        "content": [{"type": "text", "text": json.dumps(_FIXTURE_FOUND)}],
+        "usage": {"input_tokens": 1200, "output_tokens": 150},
+        "stop_reason": "end_turn"}}, "claude-sonnet-5")
+    bv_floor = _batch_verdict_from_result("license_audit", {"type": "succeeded", "message": {
+        "content": [{"type": "text", "text": json.dumps({**_FIXTURE_FOUND, "score": 40})}],
+        "usage": {}, "stop_reason": "end_turn"}}, None)
+    bv_err = _batch_verdict_from_result("ebs_oci", {"type": "errored",
+                                                    "error": {"type": "api_error"}}, None)
+
     line = format_line({"ma_carveout": v_found,
                         "erp_migration": {"found": True, "score": 91, "headline": "Mid-implementation S/4HANA program"},
                         "license_audit": v_none,
@@ -1252,6 +1656,21 @@ def self_test():
          TRIGGERS["license_audit"].get("min_found_score") == 55
          and "Never report found=true with a score below 55" in TRIGGERS["license_audit"]["brief"]
          and not any(TRIGGERS[t].get("min_found_score") for t in TRIGGERS if t != "license_audit")),
+        ("per-trigger model: env override wins, default falls through",
+         tm_env == "claude-haiku-4-5" and tm_default is None),
+        ("search caps: live-tuned spec values, NEWS_MAX_SEARCHES overrides",
+         ms_spec == (3, 4) and ms_env == 2),
+        ("batch result classifies like the sync path (usage + model captured)",
+         bv_ok["found"] and bv_ok["score"] == 88 and bv_ok["model"] == "claude-sonnet-5"
+         and bv_ok.get("usage", {}).get("input_tokens") == 1200),
+        ("batch result honors the license_audit found floor",
+         not bv_floor["found"] and bv_floor["score"] == 0
+         and "below the 55-point found bar" in bv_floor["summary"]),
+        ("errored batch line yields an error verdict, never found",
+         not bv_err["found"] and (bv_err["error"] or "").startswith("batch errored")),
+        ("batch custom_ids satisfy the API charset ^[A-Za-z0-9_-]{1,64}$",
+         all(re.fullmatch(r"[A-Za-z0-9_-]{1,64}", f"{tid}_{i}")
+             for i, tid in enumerate(TRIGGERS, start=1200))),
         ("found floor downgrades a weak verdict, evidence preserved in details",
          (lambda v: (_apply_verdict_guards("license_audit", v) or True)
           and not v["found"] and v["score"] == 0 and v["headline"] == ""
@@ -1317,6 +1736,9 @@ def main():
                     help="with --missing: also re-research scans older than N days")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--workers", type=int, default=2)
+    ap.add_argument("--sync", action="store_true",
+                    help="force the synchronous thread pool (skip the Message "
+                         "Batches API and its 50%% token discount)")
     ap.add_argument("--dry-run", action="store_true", dest="dry_run",
                     help="with --refloor: report what would change, write nothing")
     args = ap.parse_args()
@@ -1352,7 +1774,8 @@ def main():
 
     summary = backfill(stale_days=args.stale_days, limit=args.limit, workers=args.workers,
                        force=args.force, hubspot=hubspot, progress=progress,
-                       triggers=triggers)
+                       triggers=triggers, batched=not args.sync,
+                       phase=lambda msg: log(msg))
     log(f"done: {summary}")
     print(json.dumps(summary))
 

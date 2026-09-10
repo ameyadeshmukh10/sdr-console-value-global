@@ -239,12 +239,27 @@ triggers, via the Anthropic Messages API + server-side `web_search` (the same ch
   `ebs_performance` (month-end-close pain proxies, score capped at 75; **pre-condition:
   runs ONLY when the tech scan detected `oracle_ebs`** — otherwise recorded as skipped,
   and re-evaluated on the next refresh once a tech scan lands). One Messages call per
-  trigger (`NEWS_MAX_SEARCHES` searches each, default 4; `NEWS_MODEL` overrides
-  `CLAUDE_MODEL`), run in two waves so cross-referenced triggers see their upstream
+  trigger, run in two waves so cross-referenced triggers see their upstream
   verdicts: wave 1 = ma_carveout + erp_migration + ebs_performance (concurrent),
   wave 2 = license_audit + ebs_oci. Each call returns strict JSON
   `{found, score 0-100, headline, summary, date, source_url, details}`; verdicts are
-  clamped/normalized (`classify_verdict`) and a bad verdict never crashes the scan.
+  clamped/normalized (`classify_verdict`, incl. per-call token `usage`) and a bad
+  verdict never crashes the scan. `license_audit` additionally carries a deterministic
+  **found floor of 55** (`min_found_score`) — the 2026-09 live run showed 105/123 of
+  its found verdicts in the weak 30-54 one-proxy band, pure segment filler.
+- **Model resolution (2026-09 cost lesson, load-bearing):** per trigger,
+  `NEWS_MODEL_<TRIGGER_ID>` env → `TRIGGERS[..]["model"]` → `NEWS_MODEL` →
+  `CLAUDE_MODEL` → the client default `claude-opus-4-8`. **The first full run burned
+  Opus 4.8 rates ($5/$25 per MTok) on all 1,262 accounts because nothing was set** —
+  `NEWS_MODEL=claude-sonnet-5` ($2/$10) is now a Railway service variable (2026-09-10).
+  Test cheaper tiers per trigger without code changes, e.g.
+  `NEWS_MODEL_LICENSE_AUDIT=claude-haiku-4-5`; `NEWS_COMPOSITE_MODEL` scopes the
+  composite-signal call. `_client()` keeps one cached client per model.
+- **Search caps (live-tuned 2026-09):** per-trigger `max_searches` — ma_carveout /
+  license_audit / ebs_oci / ebs_performance 3, erp_migration 4. From the 1,262-account
+  run: found verdicts needed a 4th search only on erp_migration (median 4); ma_carveout
+  found at median 2, all 8 ebs_oci finds at ≤3. `NEWS_MAX_SEARCHES` (when set)
+  overrides every cap. Web search bills ~$10/1k calls PLUS each result's tokens.
 - **Storage** (`account_signals.news_*`, semantics mirror tech/hiring): `news_signals`
   = found triggers score-desc as `"M&A carve-out 85: <headline> · ERP migration 70: …"`
   or the literal `"No ERP news signals detected"`; NULL + `news_error` ONLY when EVERY
@@ -278,17 +293,40 @@ triggers, via the Anthropic Messages API + server-side `web_search` (the same ch
   the stored clocks) and forbid adopting a stale source's tense (a past "projected
   go-live" is a completed event — the 2026-09 date-reasoning fix).
 - **Verdict guards (`_apply_verdict_guards`):** deterministic backstops after
-  `classify_verdict`, sync and stored-data alike — license_audit found floor 55,
-  ebs_performance score cap 75, ma_carveout 90-day recency window (month
+  `classify_verdict`, sync and batch and stored-data alike — license_audit found
+  floor 55, ebs_performance score cap 75, ma_carveout 90-day recency window (month
   granularity). Downgrades keep the evidence in `details` (`below_found_bar` /
   `outside_window`) with only a short summary marker. **Migrations for
   already-stored rows:** `news_signals.py --refloor` (DB-only, preserves freshness
   clocks) and `--recompose` (composites for stored found rows; API spend, use
   `--limit`).
+- **Batched backfills (2026-09, opt-in):** the deliberate bulk paths — the UI bulk
+  "Research news" button and CLI `--missing` — go through the **Message Batches
+  API** (50% token cost, search fees unchanged) via `backfill(batched=True)`; the
+  intel job and the post-batch tail stay synchronous (they sit on interactive /
+  fire-and-forget paths where hour-scale batch latency is wrong). The two waves map
+  to two sequential batches (custom_id `<trigger>_<index>` — the API allows only
+  `[A-Za-z0-9_-]`, never the domain); results classify through the same
+  `_finish_verdict` path as sync. Durability: every submitted batch id is persisted
+  to `data/outreach/news_batches.json` before polling, poll errors retry until the
+  deadline instead of failing the run, a failed/timed-out wave degrades to per-row
+  error verdicts (retried next run) instead of discarding the other wave, and a
+  timeout best-effort-cancels the batch. The finalize step (HubSpot write-back →
+  composite → upserts, per-domain freshness re-check) runs in its own thread pool
+  (`NEWS_FINALIZE_WORKERS`, default 4). Knobs: `NEWS_BATCH` (0 disables batch even
+  for opt-in callers), `NEWS_BATCH_MIN` (3), `NEWS_BATCH_POLL_S` (20),
+  `NEWS_BATCH_TIMEOUT_S` (86400 — the API guarantees results within 24h). Coarse
+  progress rides the job's `current` slot ("wave 1: 240/1048 requests done").
 - **Cost gotcha (load-bearing):** every non-skipped scan is up to 6 API calls (5
   research × 3-4 searches, ≤16 total, + 1 composite) — run first backfills with
-  `--limit`, and remember the post-batch tail researches every new domain a batch
-  touches.
+  `--limit`, keep `NEWS_MODEL` pinned to a mid-tier model, and remember the
+  post-batch tail researches every new domain a batch touches. The 2026-09 run:
+  9,102 searches across 1,262 accounts, all on the accidental Opus 4.8 default.
+  Per-verdict `usage` in `news_detail.triggers` records raw token counts
+  (`input/output/cache_*` + `web_search_requests`; batched rows bill tokens at 50%
+  of those numbers — `detail.batched` marks them). API credit exhaustion
+  mid-backfill stores `news_error` rows ("credit balance is too low"), which retry
+  on the next run.
 - **Copy consumer (2026-09):** the gated approval flow (section below) consumes the
   verdicts — contacts approved through a trigger segment generate via
   `generate_batch.py`'s **erp-trigger** path, which anchors email 1 on the stored

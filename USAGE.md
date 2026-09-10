@@ -259,6 +259,7 @@ P=.claude/skills/sdr-pipeline/scripts
 
 python3 $P/news_signals.py --domain acme.com             # research one company (cached 30d; --force to re-run)
 python3 $P/news_signals.py --missing --limit 20          # backfill accounts with no research yet ($ per scan!)
+python3 $P/news_signals.py --missing --sync              # force the synchronous path (skips the 50% batch discount)
 python3 $P/news_signals.py --domain acme.com --triggers ma_carveout,erp_migration   # scope the triggers
 python3 $P/news_signals.py --self-test                   # offline check (no network, no key needed)
 python3 $P/news_signals.py --refloor --dry-run           # preview guard corrections to stored verdicts
@@ -266,8 +267,19 @@ python3 $P/news_signals.py --refloor                     # apply them (DB-only; 
 python3 $P/news_signals.py --recompose --limit 50        # composites for stored found rows ($ per row)
 ```
 
-A full scan is up to 5 web-search calls (~1-3 minutes, real API spend) — prefer
-`--limit` on a first bulk backfill, or scope with `--triggers` / `NEWS_TRIGGERS`.
+The deliberate bulk paths (`--missing` and the UI bulk button — NOT the intel job or
+the post-batch tail, which stay synchronous for latency) run through the
+**Message Batches API** — 50% token cost, results usually within the hour, guaranteed
+in 24h (`--sync` or `NEWS_BATCH=0` forces synchronous). Submitted batch ids persist in
+`data/outreach/news_batches.json` so a redeploy mid-poll never orphans a billed batch.
+A full scan is 3-4 web-search calls per trigger (per-trigger
+caps tuned from live data; `NEWS_MAX_SEARCHES` overrides) — prefer `--limit` on a
+first bulk backfill, or scope with `--triggers` / `NEWS_TRIGGERS`. The model comes
+from `NEWS_MODEL` (set to `claude-sonnet-5` in prod — unset it falls through to the
+pricey `claude-opus-4-8` client default), with per-trigger overrides via
+`NEWS_MODEL_<TRIGGER_ID>` (e.g. `NEWS_MODEL_LICENSE_AUDIT=claude-haiku-4-5`).
+When a scan finds ≥1 trigger, a composite best-angle `signal` is synthesized into the
+account's top-line Signal field (`NEWS_COMPOSITE_SIGNAL=0` disables).
 A scan only stores NULL + `news_error` (and retries next touch) when EVERY trigger
 call failed; partial results are kept and reused like any other.
 
