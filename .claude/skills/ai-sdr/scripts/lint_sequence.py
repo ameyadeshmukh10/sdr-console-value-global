@@ -62,7 +62,7 @@ PRICING = re.compile(r"/mo\b|per month|\bpricing\b|\bopt-?out\b|\bmonthly (price
 # ---- VG claim discipline and ban list ---------------------------------------
 # Banned terms/phrases, each retired for a documented reason (see offer.md).
 BANNED = re.compile(
-    r"\bpurg(e|ed|es|ing)\b|\bestates?\b|"
+    r"\bpurg(e|ed|es|ing)\b|(?<!real )(?<!real-)\bestates?\b|"
     r"no production (access|impact)|(don'?t|do not|won'?t|never) touch(ing)? (your )?production|"
     r"no access to (your )?production|nothing is deleted without|"
     r"AI[- ]powered|85\s?(-|to)\s?95\s?%", re.I)
