@@ -8,8 +8,33 @@ import OutreachDetail from '../components/OutreachDetail.jsx'
 // gated copy for enrollment — per row, in bulk for the selection, or all.
 const PAGE_SIZE = 50
 
+// Display names for the trigger segments (facet values are the raw ids).
+const SEGMENT_LABELS = {
+  ma_carveout: 'M&A carve-out', erp_migration: 'ERP migration',
+  license_audit: 'License audit', ebs_oci: 'EBS on OCI',
+  ebs_performance: 'EBS performance', hiring: 'Hiring (sales roles)',
+  no_signals: 'No signals found', suppressed: 'Suppressed',
+}
+
+// Sortable column header (same affordance as the Signals table). The sort is
+// applied server-side — the list is server-paginated, so a client sort would
+// only reorder one page.
+function SortTh({ label, k, sort, onSort }) {
+  const active = sort.key === k
+  return (
+    <th style={{ whiteSpace: 'nowrap' }}
+      aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
+      <button type="button" className="th-sort" onClick={() => onSort(k)}
+        title={`Sort by ${label.toLowerCase()}`}>
+        {label}{active ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
+      </button>
+    </th>
+  )
+}
+
 export default function OutreachPage() {
-  const [filters, setFilters] = useState({ persona: '', cta: '', status: '', q: '', group_by: '', approved: '' })
+  const [filters, setFilters] = useState({ persona: '', cta: '', status: '', segment: '', q: '', group_by: '', approved: '' })
+  const [sort, setSort] = useState({ key: '', dir: 'asc' })
   const [page, setPage] = useState(1)
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
@@ -23,14 +48,20 @@ export default function OutreachPage() {
   useEffect(() => {
     setLoading(true)
     const params = { ...filters, page, page_size: PAGE_SIZE }
+    if (sort.key) { params.sort = sort.key; params.dir = sort.dir }
     Object.keys(params).forEach((k) => params[k] === '' && delete params[k])
     api.outreach(params)
       .then((d) => { setData(d); setError(null) })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
-  }, [filters, page, reloadTick])
+  }, [filters, sort, page, reloadTick])
 
   function setF(key, val) { setPage(1); setFilters((f) => ({ ...f, [key]: val })) }
+  function toggleSort(k) {
+    setPage(1)
+    setSort((s) => (s.key === k ? { key: k, dir: s.dir === 'asc' ? 'desc' : 'asc' }
+      : { key: k, dir: 'asc' }))
+  }
   const reload = () => setReloadTick((t) => t + 1)
 
   const approvable = (r) => r.gated && r.status === 'generated' && !r.approved
@@ -80,6 +111,14 @@ export default function OutreachPage() {
             <option value="">All</option>{facetOptions('cta_type')}
           </select>
         </label>
+        <label className="field">Trigger
+          <select value={filters.segment} onChange={(e) => setF('segment', e.target.value)}>
+            <option value="">All</option>
+            {Object.entries(facets.segment || {}).filter(([k]) => k).map(([k, n]) => (
+              <option key={k} value={k}>{SEGMENT_LABELS[k] || k} ({n})</option>
+            ))}
+          </select>
+        </label>
         <label className="field">Status
           <select value={filters.status} onChange={(e) => setF('status', e.target.value)}>
             <option value="">All</option>{facetOptions('status')}
@@ -97,6 +136,7 @@ export default function OutreachPage() {
             <option value="">— none —</option>
             <option value="persona">Persona</option>
             <option value="cta_type">CTA play</option>
+            <option value="segment">Trigger</option>
             <option value="status">Status</option>
             <option value="company">Company</option>
           </select>
@@ -155,7 +195,13 @@ export default function OutreachPage() {
                     }} />
                 )}
               </th>
-              <th>Name</th><th>Company</th><th>Persona</th><th>CTA play</th><th>Status</th><th>Approval</th><th>Signal</th>
+              <SortTh label="Name" k="name" sort={sort} onSort={toggleSort} />
+              <SortTh label="Company" k="company" sort={sort} onSort={toggleSort} />
+              <SortTh label="Persona" k="persona" sort={sort} onSort={toggleSort} />
+              <SortTh label="CTA play" k="cta_type" sort={sort} onSort={toggleSort} />
+              <SortTh label="Trigger" k="segment" sort={sort} onSort={toggleSort} />
+              <SortTh label="Status" k="status" sort={sort} onSort={toggleSort} />
+              <th>Approval</th><th>Signal</th>
             </tr>
           </thead>
           <tbody>
@@ -171,6 +217,11 @@ export default function OutreachPage() {
                 <td>{r.company || <span className="muted">—</span>}</td>
                 <td><Badge kind="persona" value={r.persona} /></td>
                 <td><span className="badge cta">{r.cta_type}</span></td>
+                <td>
+                  {r.segment
+                    ? <span className="badge" style={{ color: 'var(--jade)', borderColor: 'var(--jade)' }}>{r.segment_label || r.segment}</span>
+                    : <span className="muted">—</span>}
+                </td>
                 <td><Badge kind="status" value={r.status} /></td>
                 <td>
                   {!r.gated ? <span className="muted" title="autonomous (SLA) — no approval gate">auto</span>
@@ -182,7 +233,7 @@ export default function OutreachPage() {
               </tr>
             ))}
             {data && data.items.length === 0 && !loading && (
-              <tr><td colSpan={8}><div className="empty">No matching sequences.</div></td></tr>
+              <tr><td colSpan={9}><div className="empty">No matching sequences.</div></td></tr>
             )}
           </tbody>
         </table>
