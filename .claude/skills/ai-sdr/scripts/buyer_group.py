@@ -62,11 +62,36 @@ _EXCLUDED = re.compile(
     r"\bcounsel\b|\brecruit", re.I)
 _FINANCE = re.compile(r"\bcfo\b|\bfinance\b|financial|\bcontroller\b|\baccounting\b", re.I)
 
+# Operator-editable keyword layer (Orchestration view). Additive only: custom
+# excludes join the hard exclusions, custom includes are checked AFTER every
+# built-in bucket fails, so the code's precedence never changes. Loaded fresh
+# per classification call (cheap: one small JSON read) so a saved edit applies
+# to the next ingest without a restart; any problem = no overrides.
+_PERSONA_ROLE = {
+    "erp-owner": "ERP/application owner",
+    "dba": "Database owner",
+    "data-governance": "Data governance",
+    "it-leadership": "IT leadership",
+}
+
+
+def _custom_rules():
+    try:
+        import instructions
+        return instructions.buyer_group_overrides()
+    except Exception:  # noqa: BLE001 — overrides must never break classification
+        return {"include": {}, "exclude": []}
+
 
 def buyer_role(title):
     t = " ".join((title or "").lower().split())
     if not t:
         return (NOT_ICP, False)
+    custom = _custom_rules()
+
+    # 0. Operator-added exclusions (checked with the hard exclusions).
+    if any(kw.lower() in t for kw in custom["exclude"]):
+        return ("Excluded (custom rule)", False)
 
     # 1. Hard exclusions first: CEO/founder/procurement/HR/legal, and every
     #    GTM title unless it also carries an IT/ERP/data function (e.g. a
@@ -100,6 +125,12 @@ def buyer_role(title):
         if _LEADERSHIP.search(t):
             return ("IT leadership", True)
         return ("IT (non-leadership)", False)
+
+    # 7. Operator-added include keywords — only after every built-in bucket
+    #    failed, so custom rules broaden the net without changing precedence.
+    for pid in ("erp-owner", "dba", "data-governance", "it-leadership"):
+        if any(kw.lower() in t for kw in custom["include"].get(pid, [])):
+            return (_PERSONA_ROLE[pid], True)
 
     return (NOT_ICP, False)
 

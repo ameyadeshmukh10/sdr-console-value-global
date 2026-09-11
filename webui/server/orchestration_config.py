@@ -45,6 +45,20 @@ ACRONYMS = {"cro": "CRO", "cso": "CSO", "cco": "CCO", "cmo": "CMO", "ceo": "CEO"
             "salesops": "SalesOps", "ic": "IC", "bd": "BD", "dir": "Dir"}
 
 
+def _knowledge_text(fname):
+    """Effective knowledge doc: the operator's override (Orchestration studio)
+    when present, else the committed file — so this view never shows text the
+    pipeline is no longer using."""
+    try:
+        import instructions as _instr
+        override = _instr.knowledge_override(fname)
+        if override:
+            return override
+    except Exception:  # noqa: BLE001
+        pass
+    return (KNOWLEDGE_DIR / fname).read_text()
+
+
 # ---- generic parsing helpers -------------------------------------------------
 def _md_sections(text):
     """{heading-without-##: body} split on top-level '## ' headings."""
@@ -237,8 +251,15 @@ def _icp_filter_section(root):
     }
 
 
-def _personas_section(root):
+def _personas_section(root, overlay=True):
     agents_dir = root / ".claude" / "agents"
+    overrides = {}
+    if overlay:
+        try:
+            import instructions as _instr
+            overrides = _instr.persona_overrides()
+        except Exception:  # noqa: BLE001
+            overrides = {}
     out = []
     for pid, fname in PERSONA_AGENT_FILES.items():
         text = (agents_dir / fname).read_text()
@@ -256,14 +277,16 @@ def _personas_section(root):
             key = {"Pain": "pain", "Outcome to sell": "outcome",
                    "Preferred CTAs": "ctas", "Tone": "tone"}[label]
             fields[key] = rest
+        o = overrides.get(pid) or {}
+        fields.update({k: v for k, v in o.items() if v})
         out.append({"id": pid, "agent": fm.get("name", fname[:-3]), "name": name,
-                    "description": fm.get("description", ""), **fields})
+                    "description": fm.get("description", ""), "overridden": bool(o), **fields})
     return out
 
 
 def _sequencing_section(root):
-    icp = _md_sections((root / ".claude" / "skills" / "ai-sdr" / "knowledge" / "icp-email.md").read_text())
-    cta = _md_sections((root / ".claude" / "skills" / "ai-sdr" / "knowledge" / "cta-offers.md").read_text())
+    icp = _md_sections(_knowledge_text("icp-email.md"))
+    cta = _md_sections(_knowledge_text("cta-offers.md"))
 
     def _tier_items(body):
         items, current = [], None
@@ -319,7 +342,7 @@ def _sequencing_section(root):
 
 
 def _knowledge_section(root):
-    offer = _md_sections((root / ".claude" / "skills" / "ai-sdr" / "knowledge" / "offer.md").read_text())
+    offer = _md_sections(_knowledge_text("offer.md"))
     return {
         "one_liner": _strip_md(re.sub(r"\s+", " ", _section(offer, "One-liner"))),
         "proof": [_first_sentence(_strip_md(b)) for b in _bullets(_section(offer, "Proof"))],
@@ -348,7 +371,7 @@ LINT_LABELS = [
 
 
 def _guardrails_section(root):
-    icp = _md_sections((root / ".claude" / "skills" / "ai-sdr" / "knowledge" / "icp-email.md").read_text())
+    icp = _md_sections(_knowledge_text("icp-email.md"))
     rules = [_strip_md(b) for b in
              _bullets(_section(icp, "Hard guardrails")) + _bullets(_section(icp, "Formatting"))]
     checks = []

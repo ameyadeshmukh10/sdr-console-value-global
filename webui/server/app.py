@@ -4231,6 +4231,186 @@ def do_suppression_upload(csv_text, replace=False, by=None):
             "rows_in_file": len(rows)}, 200
 
 
+# ---- agent instructions (Orchestration studio) --------------------------------
+# Operator-editable layer for how the AI SDR thinks: custom ICP keywords,
+# per-persona framing, the five ERP trigger plays, and the knowledge-base
+# markdown. Stored on the volume (data/outreach/instructions/) through
+# ai-sdr/scripts/instructions.py. Every pipeline reader falls back to the
+# committed defaults when the layer is absent or broken, and the guardrail
+# linter is deliberately NOT editable — edits can never bypass it.
+sys.path.insert(0, str(SCRIPTS / "ai-sdr" / "scripts"))
+import instructions as agent_instructions  # noqa: E402  (stdlib-only, no I/O at import)
+
+INSTR_LOCK = threading.Lock()
+
+
+def instructions_payload():
+    """Editable-instructions state for the studio: per item the committed
+    default, the active override (if any), and edit metadata. Never raises."""
+    out = {"ok": True}
+    A = agent_instructions
+    defaults = {}
+    try:
+        for p in orchestration_config._personas_section(orchestration_config.PROJECT_ROOT,
+                                                        overlay=False):
+            defaults[p["id"]] = {"name": p["name"], "pain": p["pain"],
+                                 "outcome": p["outcome"], "ctas": p["ctas"], "tone": p["tone"]}
+    except Exception:  # noqa: BLE001
+        defaults = {}
+    out["personas"] = {"defaults": defaults, "overrides": A.persona_overrides()}
+    try:
+        import generate_batch as G
+        play_defaults = {seg: {"label": play.get("label", seg), "problem": play.get("problem", ""),
+                               "solution": play.get("solution", ""), "opener": play.get("opener", "")}
+                         for seg, play in G.ERP_PLAYS.items()}
+    except Exception:  # noqa: BLE001
+        play_defaults = {}
+    out["plays"] = {"defaults": play_defaults, "overrides": A.play_overrides()}
+    knowledge = {}
+    for fname in A.KNOWLEDGE_FILES:
+        try:
+            default_text = (SCRIPTS / "ai-sdr" / "knowledge" / fname).read_text()
+        except OSError:
+            default_text = ""
+        knowledge[fname] = {"default": default_text, "override": A.knowledge_override(fname)}
+    out["knowledge"] = knowledge
+    out["icp"] = A.buyer_group_overrides()
+    out["meta"] = A.meta()
+    return out
+
+
+def icp_test_payload(title):
+    """Classify one job title with the LIVE rules (built-in + custom keywords)."""
+    try:
+        import buyer_group as bg
+        role, icp = bg.buyer_role(title)
+        return {"ok": True, "title": title, "role": role, "icp": bool(icp),
+                "persona": bg.persona_for_title(title)}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
+
+
+def _save_fielded(A, fname, key, content, valid_keys, fields, stamp_key, by):
+    """Shared save shape for personas.json / erp_plays.json: empty = reset."""
+    if key not in valid_keys:
+        return f"unknown key {key!r}"
+    if not isinstance(content, dict):
+        return "content must be an object"
+    clean = {k: (content.get(k) or "").strip()[:A.MAX_FIELD_CHARS] for k in fields}
+    data = A.load_json(fname)
+    if any(clean.values()):
+        data[key] = {k: v for k, v in clean.items() if v}
+        A.write_json(fname, data)
+        A.stamp(stamp_key, by)
+    else:
+        data.pop(key, None)
+        A.write_json(fname, data)
+        A.clear_stamp(stamp_key)
+    return None
+
+
+def do_save_instructions(body, by=None):
+    A = agent_instructions
+    kind = (body.get("kind") or "").strip()
+    key = (body.get("key") or "").strip()
+    content = body.get("content")
+    warnings = []
+    with INSTR_LOCK:
+        if kind == "persona":
+            err = _save_fielded(A, "personas.json", key, content, A.PERSONA_IDS,
+                                A.PERSONA_FIELDS, f"persona:{key}", by)
+        elif kind == "play":
+            err = _save_fielded(A, "erp_plays.json", key, content, A.PLAY_SEGMENTS,
+                                A.PLAY_FIELDS, f"play:{key}", by)
+        elif kind == "knowledge":
+            err = None
+            if key not in A.KNOWLEDGE_FILES:
+                err = f"unknown knowledge file {key!r}"
+            elif not isinstance(content, str):
+                err = "content must be a string"
+            else:
+                text = content.replace("\r\n", "\n")
+                if len(text) > A.MAX_KNOWLEDGE_CHARS:
+                    err = f"document too large (max {A.MAX_KNOWLEDGE_CHARS} characters)"
+                elif not text.strip():
+                    A.remove_knowledge(key)
+                    A.clear_stamp(f"knowledge:{key}")
+                else:
+                    # Soft style notes only — the linter still gates every email.
+                    try:
+                        import lint_sequence as L
+                        if L.DASH.search(text):
+                            warnings.append("contains em/en dashes — fine in instructions, "
+                                            "but the writer may copy them into emails where "
+                                            "they are banned")
+                        m = L.BANNED.search(text)
+                        if m:
+                            warnings.append(f"contains the banned term '{m.group(0)}' — "
+                                            "copy that uses it will fail the linter")
+                    except Exception:  # noqa: BLE001
+                        pass
+                    A.write_knowledge(key, text)
+                    A.stamp(f"knowledge:{key}", by)
+        elif kind == "icp":
+            err = None
+            if not isinstance(content, dict):
+                err = "content must be an object"
+            else:
+                inc_raw = content.get("include") if isinstance(content.get("include"), dict) else {}
+                cleaned = {"include": {}, "exclude": A._clean_keywords(content.get("exclude"))}
+                dropped = len(content.get("exclude") or []) - len(cleaned["exclude"])
+                for pid, kws in inc_raw.items():
+                    if pid not in A.PERSONA_IDS:
+                        continue
+                    ck = A._clean_keywords(kws)
+                    dropped += len(kws or []) - len(ck)
+                    if ck:
+                        cleaned["include"][pid] = ck
+                if dropped > 0:
+                    warnings.append(f"{dropped} keyword(s) dropped — keywords are 1-6 plain "
+                                    "words (letters, numbers, & / ' + . -), no punctuation "
+                                    "tricks, no duplicates")
+                if cleaned["include"] or cleaned["exclude"]:
+                    A.write_json("buyer_group.json", cleaned)
+                    A.stamp("icp", by)
+                else:
+                    A.write_json("buyer_group.json", {})
+                    A.clear_stamp("icp")
+        else:
+            err = f"unknown kind {kind!r}"
+    if err:
+        return {"ok": False, "error": err}, 400
+    payload = instructions_payload()
+    payload["warnings"] = warnings
+    return payload, 200
+
+
+def do_reset_instructions(body):
+    A = agent_instructions
+    kind = (body.get("kind") or "").strip()
+    key = (body.get("key") or "").strip()
+    with INSTR_LOCK:
+        if kind == "persona" and key in A.PERSONA_IDS:
+            data = A.load_json("personas.json")
+            data.pop(key, None)
+            A.write_json("personas.json", data)
+            A.clear_stamp(f"persona:{key}")
+        elif kind == "play" and key in A.PLAY_SEGMENTS:
+            data = A.load_json("erp_plays.json")
+            data.pop(key, None)
+            A.write_json("erp_plays.json", data)
+            A.clear_stamp(f"play:{key}")
+        elif kind == "knowledge" and key in A.KNOWLEDGE_FILES:
+            A.remove_knowledge(key)
+            A.clear_stamp(f"knowledge:{key}")
+        elif kind == "icp":
+            A.write_json("buyer_group.json", {})
+            A.clear_stamp("icp")
+        else:
+            return {"ok": False, "error": f"nothing to reset for {kind!r}/{key!r}"}, 400
+    return instructions_payload(), 200
+
+
 # ---- outreach gate (stage 5-6: edit + approve the generated copy) ------------
 _EDIT_EMAIL_KEYS = [f"{k}{i}" for i in range(1, 5) for k in ("subject", "body")]
 _EDIT_LI_KEYS = ["li_connect", "li_msg1", "li_msg2"]
@@ -4493,6 +4673,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(db_batches(status=status, limit=limit))
             if path == "/api/orchestration/config":
                 return self._json(orchestration_config.orchestration_config_payload())
+            if path == "/api/instructions":
+                return self._json(instructions_payload())
+            if path == "/api/instructions/icp-test":
+                title = (params.get("title", [""])[0] or "").strip()[:200]
+                return self._json(icp_test_payload(title))
             if path == "/api/analytics":
                 return self._json(analytics_payload())
             if path == "/api/analytics/linkedin":
@@ -4862,6 +5047,14 @@ class Handler(BaseHTTPRequestHandler):
                 body = self._read_body()
                 payload, code = do_approve_outreach(
                     contact_ids=body.get("contact_ids"), approve_all=bool(body.get("all")))
+                return self._json(payload, code)
+            if path == "/api/instructions/save":
+                body = self._read_body()
+                payload, code = do_save_instructions(
+                    body, by=verify_token(bearer_from_headers(self.headers)))
+                return self._json(payload, code)
+            if path == "/api/instructions/reset":
+                payload, code = do_reset_instructions(self._read_body())
                 return self._json(payload, code)
             if path.startswith("/api/outreach/") and path.endswith("/update"):
                 cid = path[len("/api/outreach/"):-len("/update")]
