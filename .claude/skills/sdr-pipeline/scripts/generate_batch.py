@@ -92,15 +92,21 @@ on detected Oracle EBS" or "role anchor - IT leadership, no platform detected".
 _VG_SHARED_RULES = """\
 Shared rules (every variant): 35-110 words per email (the approved set runs 45-105); short
 paragraphs separated by a blank line; ONE idea and ONE ask per email; subject 1 is
-"What's it costing to keep data nobody touches?" and subjects 2-4 are "RE: " + subject 1,
-verbatim; open with a question, never a claim; state the 10/20/70 pattern about long-running
-EBS systems in general, NEVER about the recipient's environment; never open with "Congrats" or
-assert their ERP tenure; no meeting or assessment ask in touch 1; touch 2 carries the free Data
-Lifecycle Assessment (its five deliverables + www.valueglobal.net/archiving-solutions); touch 3
-is the 20-minute call ask with two windows named in prose, never a booking link; touch 4 is a
-breakup that concedes timing and leaves the read on the table; no em or en dashes; NO sign-off
-or trailing name; no hype; no pricing; no production-access reassurance; at most two
-credibility stats per email; the licensing rule from the knowledge applies.
+"What's it costing to keep data nobody touches?"; every touch lands as its OWN standalone
+email, never a threaded reply: subjects 2-4 are each a distinct plain subject line (no "RE:"
+prefix, never reuse a subject) naming that touch's give (touch 2 the assessment, touch 3 the
+20 minutes, touch 4 the goodbye); open with a question, never a claim; state the 10/20/70
+pattern about long-running EBS systems in general, NEVER about the recipient's environment;
+never open with "Congrats" or assert their ERP tenure; no meeting or assessment ask in touch
+1; touch 2 carries the free Data Lifecycle Assessment (its five deliverables +
+www.valueglobal.net/archiving-solutions); touch 3 is the 20-minute call ask with two windows
+named in prose as weekday plus time of day only ("Tuesday morning or Thursday afternoon"),
+never "this week", today, tomorrow, or a calendar date (the email sends days after it is
+written, so dated windows go stale), and never a booking link; touch 4 is a breakup that
+concedes timing and leaves the read on the table; never offer case studies or "how similar
+companies handled it" (none exist yet); no em or en dashes; NO sign-off or trailing name; no
+hype; no pricing; no production-access reassurance; at most two credibility stats per email;
+the licensing rule from the knowledge applies.
 """
 
 WRITE_RULES = {
@@ -276,19 +282,43 @@ plus the sales play for that trigger. Do NOT search the web. Write a 4-touch col
 plus 3 LinkedIn touches anchored on that trigger.
 
 # Write rules
-- 35-110 words per email. One or two short paragraphs separated by a blank line. ONE idea and
+- 35-110 words per email. Two or three short paragraphs separated by a blank line. ONE idea and
   ONE ask per email.
-- Subject 1 may be trigger-specific; subjects 2-4 are "RE: " + subject 1, verbatim.
-- Touch 1 opens on the trigger event (name what actually happened, with its month/date when given),
-  makes the play's problem concrete for THEIR situation in one or two lines, and ends with ONE
-  soft, open question. No meeting ask and no product pitch in touch 1.
-- Touch 2: one level deeper on the cost or risk of doing nothing (the play's problem), then
-  introduce in plain words what ERP Data Retirement does about it (the play's solution). End on a
-  soft question or a light offer to share how similar companies handled it.
+- Every touch lands in the inbox as its OWN standalone email, never a threaded reply. Write a
+  DISTINCT subject line for each touch: no "RE:" or "Fwd:" prefix, never reuse a subject.
+  Subject 1 names the trigger angle; subject 2 the assessment give; subject 3 the 20-minute
+  ask; subject 4 the goodbye. Plain and specific, roughly 4 to 8 words, no clickbait.
+- Touch 1, in this exact shape. Open on the trigger event (name what actually happened, with
+  its month/date when given) and make the play's problem concrete for THEIR situation in one
+  or two lines, in the voice of a senior consultant who has run this playbook talking to a
+  peer: no consulting filler, no "defined window for separating and migrating" phrasing. Then
+  state what that dormant or legacy data costs in plain operational terms, adapted from the
+  play: storage plus performance, slower queries, heavier backups, delays cloning the database
+  for dev and test, a close that drags. Then one bridge sentence: what if we showed you a way
+  to move that dormant data off the live system while keeping it fully searchable and
+  audit-ready? Close with the permission ask, using their real company name: "Can I send you
+  some more details to show how <Company> could benefit?" NEVER end touch 1 on an open-ended
+  question ("how are you thinking about...", "what's your plan for..."): the only questions
+  allowed are the what-if bridge and the closed send-details ask. No meeting ask in touch 1.
+- Touch 2: open with ONE fresh insight tied to the trigger event, a different angle than touch
+  1's opener, never "just following up". Then offer the free Data Lifecycle Assessment by what
+  they get: a data-growth profile, which modules are archive candidates, a quantified savings
+  number, and a phased roadmap, with the link www.valueglobal.net/archiving-solutions. End
+  with: "Can I send over a sample report so you can see exactly what that looks like for an
+  environment like <Company>'s?" NEVER offer case studies, references, success stories, or
+  "how similar companies/acquirers handled it": no case studies exist for this offering yet.
+  No meeting ask in touch 2.
 - Touch 3: a short, specific meeting ask: 20 minutes to walk through what the archive / separation /
-  footprint compression would look like for their environment. Two windows named in prose, never a
-  booking link.
-- Touch 4: a genuine one-line breakup. No guilt, leave the door open.
+  footprint compression would look like for their environment. Name two windows in prose as
+  weekday plus time of day only ("Tuesday morning or Thursday afternoon work on my end").
+  NEVER anchor a window to "this week", today, tomorrow, or a calendar date: the email goes
+  out days or weeks after it is written, so a dated window reads stale. Never a booking link.
+- Touch 4, the breakup, in this exact shape (45-75 words, three short paragraphs). First: "I
+  will stop here rather than keep filling your inbox." Then leave the asset: if archiving old
+  ERP data lands on their desk later this year, or on someone else's, the white paper is worth
+  having, a two-minute read on what dormant ERP data costs and what companies do about it.
+  Close: "Reply any time and I will send it. Happy to stay connected either way." No guilt,
+  no new argument, no meeting ask.
 - The trigger verdict and the play are your ONLY facts about this company (plus a detected-ERP
   line when provided). Never invent numbers, dates, names, or internal details.
 - When a detected on-prem ERP platform is provided, name it once, naturally: an ERP that has run
@@ -578,10 +608,11 @@ def _wc(body):
 
 def _lint_short(email, lo=35, hi=110):
     """VG rules for the trigger-anchored sequence: word band, no dashes /
-    sign-off / pricing / hype, the full ban + claim-discipline list, a soft
-    question in touch 1, a breakup in touch 4, RE: subject chain. Structure is
-    looser than the default path (the trigger opener replaces the canonical
-    question opener), but the claim discipline is identical."""
+    sign-off / pricing / hype, the full ban + claim-discipline list, a closed
+    (never open-ended) ask in touch 1, no case-study offers, no stale call
+    windows, a breakup in touch 4 that leaves the asset, standalone subjects.
+    Structure is looser than the default path (the trigger opener replaces the
+    canonical question opener), but the claim discipline is identical."""
     steps = []
     for i in range(1, 5):
         subj, body = email.get(f"subject{i}", ""), email.get(f"body{i}", "")
@@ -617,10 +648,28 @@ def _lint_short(email, lo=35, hi=110):
             issues.append(f"step{s['n']}: more than two credibility stats")
         if L.INFOCORVUS_FIGURES.search(b) and "infocorvus" not in b.lower():
             issues.append(f"step{s['n']}: InfoCorvus figure without the vendor attribution")
+        if L.CASE_STUDY.search(b):
+            issues.append(f"step{s['n']}: offers a case study / 'how similar companies "
+                          "handled it' (none exist for this offering yet)")
     if "?" not in steps[0]["body"]:
-        issues.append("step1: no soft question (touch 1 ends on one open question)")
+        issues.append("step1: no question (touch 1 closes on the send-details permission ask)")
+    if L.OPEN_ENDED.search(steps[0]["body"]):
+        issues.append("step1: ends on an open-ended discovery question (never; close with "
+                      "the permission ask: 'Can I send you some more details...?')")
+    for s in steps[:2]:
+        if L.MEETING.search(s["body"]):
+            issues.append(f"step{s['n']}: asks for a call (only step 3 may)")
+    if not L.MEETING.search(steps[2]["body"]):
+        issues.append("step3: must ask for the short 20-minute call (two windows in prose)")
+    if L.STALE_WINDOW.search(steps[2]["body"]):
+        issues.append(f"step3: stale time reference "
+                      f"'{L.STALE_WINDOW.search(steps[2]['body']).group(0)}' (the email sends "
+                      "days after writing; name windows as weekday + time of day only)")
     if not L.BREAKUP.search(steps[-1]["body"]):
         issues.append("step4: final step is not a breakup")
+    if not re.search(r"white paper|write-?up|\bread\b|\bpov\b|send it", steps[-1]["body"], re.I):
+        issues.append("step4: breakup must leave the asset on the table ('reply any time "
+                      "and I will send it')")
     return issues
 
 

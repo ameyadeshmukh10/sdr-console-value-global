@@ -49,7 +49,10 @@ and the general pattern about long-running ERP systems.
 
 ## Hard rules
 - Subject 1 is `What's it costing to keep data nobody touches?` unless the trigger play
-  supplies its own; subjects 2-4 are `RE:` plus subject 1, verbatim.
+  supplies its own. Every touch lands as its own standalone email, never a threaded reply:
+  subjects 2-4 are each a distinct plain subject line (no `RE:` prefix, never reuse a
+  subject) naming that touch's give (touch 2 the assessment, touch 3 the 20 minutes,
+  touch 4 the goodbye).
 - Never assert facts about the recipient's environment ("your database is 70% dormant").
   State the pattern generally ("in most long-running EBS systems"). Never open with
   "Congrats" and never assert how long they have run their ERP.

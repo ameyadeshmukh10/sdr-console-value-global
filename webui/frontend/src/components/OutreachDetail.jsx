@@ -138,6 +138,30 @@ export default function OutreachDetail({ id, onClose, onChanged }) {
 
             <div className="section-h">Signal</div>
             <div className="touch"><div className="body">{d.signal}</div></div>
+            {d.account_signal?.signal && d.account_signal.signal !== d.signal && (
+              <div className="touch">
+                <div className="step">Account research{d.account_signal.researched_at ? ` · ${String(d.account_signal.researched_at).slice(0, 10)}` : ''}</div>
+                <div className="body">{d.account_signal.signal}</div>
+              </div>
+            )}
+            {d.account_signal?.trigger && (
+              <div className="touch">
+                <div className="step">
+                  {d.account_signal.trigger.label} evidence
+                  {d.account_signal.trigger.date ? ` · ${d.account_signal.trigger.date}` : ''}
+                  {d.account_signal.trigger.score != null ? ` · score ${d.account_signal.trigger.score}` : ''}
+                </div>
+                {d.account_signal.trigger.headline && <div className="subj">{d.account_signal.trigger.headline}</div>}
+                {d.account_signal.trigger.summary && <div className="body">{d.account_signal.trigger.summary}</div>}
+                {d.account_signal.trigger.source_url && (
+                  <div className="body" style={{ marginTop: 6 }}>
+                    <a href={d.account_signal.trigger.source_url} target="_blank" rel="noreferrer" className="mono">
+                      {d.account_signal.trigger.source_url}
+                    </a>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="section-h">Email sequence</div>
             {!editing && emailSteps.map((s) => (

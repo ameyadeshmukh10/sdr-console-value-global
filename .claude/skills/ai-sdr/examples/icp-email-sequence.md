@@ -12,7 +12,9 @@ about the recipient), the POV read as the only touch-1 ask, the assessment at to
 fact about the prospect and is exactly what this example replaces: state the pattern, then ask.
 
 Format: short paragraphs separated by blank lines, no sign-off (the Bison campaign appends the
-signature), no em dashes, one ask per email, subjects 2-4 reuse subject 1 as an RE: thread.
+signature), no em dashes, one ask per email. Every touch lands as its own standalone email,
+never a threaded reply: subjects 2-4 are each a distinct plain line (no RE:) naming that
+touch's give.
 
 ## Step 1 — Subject: What's it costing to keep data nobody touches?
 Dan, a question I keep putting to people who own enterprise applications on long-standing Oracle EBS.
@@ -21,21 +23,21 @@ How much of your database is history you have to keep for audit and tax but rare
 
 If that is a live issue, I have written a short POV on how companies move that cold data off the running system while keeping it searchable. Want me to send it over?
 
-## Step 2 — Subject: RE: What's it costing to keep data nobody touches?
+## Step 2 — Subject: A number for what dormant ERP data costs
 Dan, following up on my note about historical ERP data.
 
 Hardware buys time, not a fix. The data keeps growing, backups and clones grow with it, and the close stretches a little more each year. Moving the dormant history into a governed archive removes the cause, and the history stays searchable and audit-ready.
 
 We run a free Data Lifecycle Assessment that puts a real number on it: your data-growth profile, archive candidates by module, a quantified cost-reduction opportunity, risk areas, and a phased roadmap. More here: www.valueglobal.net/archiving-solutions. Worth setting up?
 
-## Step 3 — Subject: RE: What's it costing to keep data nobody touches?
+## Step 3 — Subject: 20 minutes to scope the assessment
 Dan, one more thought on the assessment.
 
 Scoping it takes a short call: which modules, roughly how much history, and what you would want the roadmap to cover. Twenty minutes does it.
 
 Would Tuesday morning or Thursday afternoon work? If another window is better, name it and I will work around you.
 
-## Step 4 — Subject: RE: What's it costing to keep data nobody touches?
+## Step 4 — Subject: Last note from me
 Dan, I will stop here rather than keep filling your inbox.
 
 If archiving old ERP data lands on your desk later this year, or on someone else's, the write-up is worth having. A two-minute read on what dormant ERP data costs and what companies do about it.

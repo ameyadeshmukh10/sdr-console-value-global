@@ -6,7 +6,7 @@ Parses a markdown sequence file with blocks:
 and checks each email against the rules in knowledge/icp-email.md + cta-offers.md + offer.md.
 Every check below encodes a documented Value Global rule (most are the product of a failed
 live message, not styling): the ban list, claim discipline, the read-first offer ladder, the
-RE: subject chain, and the no-booking-link rule.
+standalone-subject rule, and the no-booking-link rule.
 
 Per step: word band 35-110 (enforced with slack at 30-120), paragraph breaks, no sign-off,
 no em/en dashes, banned terms, hype, no recipient assertions ("Congrats", "70% of your..."),
@@ -14,7 +14,8 @@ no analyst or Oracle-relationship claims, no licensing percentages, no pricing, 
 links, URL whitelist, at most two credibility stats, InfoCorvus attribution. Step 1 must open
 on a question and offer only the read (no meeting, no assessment); step 3 is the only step
 that may ask for a call; the final step is a breakup that leaves the asset available.
-Sequence-level: subjects 2-4 must be "RE: " + subject 1.
+Sequence-level: every step carries its own standalone subject — each touch lands as its own
+email, never a threaded "RE:" reply, and no subject is reused.
 
 Usage:  python3 .claude/skills/ai-sdr/scripts/lint_sequence.py <sequence.md>
 """
@@ -98,6 +99,26 @@ INFOCORVUS_FIGURES = re.compile(r"\$8\.2\s?M|\$1\s?M\s?(-|to)\s?\$?6\s?M|"
                                 r"40\s?(-|to)\s?60\s?%|60\s?(-|to)\s?80\s?%|13 weeks", re.I)
 # The assessment must not appear in touch 1 (field-tested failure).
 ASSESSMENT = re.compile(r"assessment", re.I)
+# Time references that go stale between writing and sending (sequences send days
+# or weeks after generation): never anchor a call window to "this week", today/
+# tomorrow, or a calendar date. Weekday + time of day ("Tuesday morning") is fine.
+STALE_WINDOW = re.compile(
+    r"\bthis week\b|\btoday\b|\btomorrow\b|"
+    r"\b(january|february|march|april|may|june|july|august|september|october|"
+    r"november|december)\s+\d{1,2}\b|\b\d{1,2}/\d{1,2}\b", re.I)
+# Case-study / reference offers: no case studies exist for this offering yet.
+CASE_STUDY = re.compile(
+    r"case stud(y|ies)|success stor(y|ies)|customer stor(y|ies)|reference customers?|"
+    r"how (other|similar) (companies|acquirers|teams|firms|organizations)[^.?!\n]{0,40}"
+    r"(handled|did|approached|managed|solved)|"
+    r"share how similar|similar (acquirers|companies|teams) handled", re.I)
+# Open-ended discovery questions as the touch-1 close (documented failure: cold
+# touch 1 never ends on "how are you thinking about X"; the ask is a closed
+# permission question).
+OPEN_ENDED = re.compile(
+    r"how are you (thinking|planning|approaching)|how do you (plan|intend|think)|"
+    r"what('s| is) your (plan|approach|thinking|strategy)|"
+    r"curious (how|what|where|whether)|how are you handling", re.I)
 
 
 def sentences(text):
@@ -126,19 +147,27 @@ def parse_steps(md):
 
 
 def sequence_issues(steps):
-    """Sequence-level checks: the RE: subject chain (the thread is the asset)."""
+    """Sequence-level checks: every touch is its own standalone email with its
+    own subject — never a threaded 'RE:' reply, and no subject reused."""
     issues = []
     if not steps:
         return ["no steps"]
-    subj1 = (steps[0].get("subject") or "").strip()
-    if not subj1:
-        issues.append("step1: missing subject")
-        return issues
-    for s in steps[1:]:
-        got = (s.get("subject") or "").strip()
-        if got.lower() != f"re: {subj1}".lower():
-            issues.append(f"step{s.get('n', '?')}: subject must be 'RE: {subj1}' "
-                          "(reuse subject 1 as an RE: thread)")
+    seen = {}
+    for s in steps:
+        n = s.get("n", "?")
+        subj = (s.get("subject") or "").strip()
+        if not subj:
+            issues.append(f"step{n}: missing subject (every touch needs its own subject line)")
+            continue
+        if re.match(r"^\s*(re|fwd?)\s*:", subj, re.I):
+            issues.append(f"step{n}: subject starts with 'RE:' (each touch is its own email, "
+                          "never a threaded reply; write a standalone subject)")
+        key = subj.lower()
+        if key in seen:
+            issues.append(f"step{n}: subject duplicates step{seen[key]}'s "
+                          "(each touch needs a distinct subject line)")
+        else:
+            seen[key] = n
     return issues
 
 
@@ -212,6 +241,10 @@ def lint_email(step, is_last, is_first=False):
         issues.append(f"step {n} asks for a call (only step 3 may; field-tested rule)")
     if n == 3 and not MEETING.search(body):
         issues.append("step 3 must ask for the short call (20 minutes, two windows in prose)")
+    if n == 3 and STALE_WINDOW.search(body):
+        issues.append(f"stale time reference '{STALE_WINDOW.search(body).group(0)}' "
+                      "(the email sends days after writing; name windows as weekday + "
+                      "time of day only, e.g. 'Tuesday morning or Thursday afternoon')")
     if n in (2, 3) and n_q == 0:
         issues.append("no clear ask (no question)")
 
