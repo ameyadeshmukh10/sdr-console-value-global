@@ -464,6 +464,8 @@ class OutreachIndex:
                         "approved": bool(dbm.get("approved_at")),
                         "edited": bool(asset.get("edited_at")),
                     })
+                    seg = rows[-1]["segment"]
+                    rows[-1]["segment_label"] = SEGMENT_LABELS.get(seg, seg) if seg else ""
             # sort populated companies first (blanks last), then by name
             rows.sort(key=lambda r: (r["company"].strip() == "", r["company"].lower(), r["last_name"].lower()))
             self.rows = rows
@@ -492,16 +494,21 @@ class OutreachIndex:
         persona = get("persona")
         status = get("status")
         cta = get("cta")
+        segment = get("segment")
         company = get("company").lower()
         signal = get("signal").lower()
         q = get("q").lower()
         group_by = get("group_by")
         approved = get("approved")  # review filter: "yes" / "no" over gated rows
+        sort = get("sort")
+        sdir = get("dir")
 
         def matches(r):
             if persona and r["persona"] != persona:
                 return False
             if status and r["status"] != status:
+                return False
+            if segment and r["segment"] != segment:
                 return False
             if approved == "yes" and not r.get("approved"):
                 return False
@@ -535,13 +542,27 @@ class OutreachIndex:
             "persona": facet("persona"),
             "cta_type": facet("cta_type"),
             "status": facet("status"),
+            "segment": facet("segment"),
         }
 
+        # Explicit column sort (before pagination — the list is server-paged).
+        # "segment" sorts by the display label; blanks always sink to the end.
+        sort_fields = {"name": "last_name", "company": "company", "persona": "persona",
+                       "cta_type": "cta_type", "status": "status",
+                       "segment": "segment_label", "signal": "signal"}
+        sf = sort_fields.get(sort)
+        if sf:
+            filtered = sorted(filtered, key=lambda r: (r.get(sf) or "").lower(),
+                              reverse=(sdir == "desc"))
+            filtered.sort(key=lambda r: (r.get(sf) or "") == "")  # stable: blanks last
+
         groups = None
-        if group_by in ("persona", "cta_type", "status", "company"):
+        group_field = {"persona": "persona", "cta_type": "cta_type", "status": "status",
+                       "company": "company", "segment": "segment_label"}.get(group_by)
+        if group_field:
             g = {}
             for r in filtered:
-                g[r[group_by]] = g.get(r[group_by], 0) + 1
+                g[r.get(group_field) or "—"] = g.get(r.get(group_field) or "—", 0) + 1
             groups = dict(sorted(g.items(), key=lambda kv: -kv[1]))
 
         try:
