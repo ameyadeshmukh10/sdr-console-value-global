@@ -300,6 +300,9 @@ plus 3 LinkedIn touches anchored on that trigger.
   some more details to show how <Company> could benefit?" NEVER end touch 1 on an open-ended
   question ("how are you thinking about...", "what's your plan for..."): the only questions
   allowed are the what-if bridge and the closed send-details ask. No meeting ask in touch 1.
+  Touch 1 runs long easily: keep it to 70-100 words TOTAL. One or two short sentences for the
+  trigger opener, ONE sentence for the cost (pick two or three symptoms, never the whole
+  list), one bridge, one ask. Count the words before you answer.
 - Touch 2: open with ONE fresh insight tied to the trigger event, a different angle than touch
   1's opener, never "just following up". Then offer the free Data Lifecycle Assessment by what
   they get: a data-growth profile, which modules are archive candidates, a quantified savings
