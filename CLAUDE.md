@@ -31,8 +31,9 @@ HeyReach (LinkedIn, deferred).
   (never drop) non-US/CA, healthcare, sub-1,000 headcount, and missing LinkedIn URLs.
 - **Copy system:** knowledge base + examples + agents are Value Global content; the
   linter (`ai-sdr/scripts/lint_sequence.py`) enforces the client ban list, claim
-  discipline (licensing = cores/users, not data volume), the RE: subject chain, and the
-  read-first offer ladder. Volume guardrail: `ENROLL_MONTHLY_CAP` (default 3000).
+  discipline (licensing = cores/users, not data volume), standalone subjects (each touch
+  its own email, no RE: threading), and the read-first offer ladder. Volume guardrail:
+  `ENROLL_MONTHLY_CAP` (default 3000).
 
 ## Architecture (verified, don't re-derive)
 

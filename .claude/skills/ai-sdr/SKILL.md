@@ -42,7 +42,8 @@ invent product claims, numbers, or signals.**
    read) in the output format below.
 4. **Lint and revise to pass:**
    `python3 .claude/skills/ai-sdr/scripts/lint_sequence.py <file.md>` (35-110w, question
-   opener, read-only ask in touch 1, RE: subject chain, the full ban list, breakup in step 4).
+   opener, read-only ask in touch 1, standalone subjects (no RE:, each touch its own email),
+   the full ban list, breakup in step 4).
 5. Template + a passing reference: `examples/icp-email-sequence.md`.
 
 ### B. Test the CTA arms (the iteration loop)

@@ -27,7 +27,6 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS.parents[1] / "ai-sdr" / "scripts"))      # lint_sequence
 sys.path.insert(0, str(SCRIPTS.parents[1] / "email-bison" / "scripts"))  # bison_client
 from heyreach_client import HeyReachClient, HeyReachError  # noqa: E402
-import lint_sequence as L  # noqa: E402
 
 PROJECT_ROOT = SCRIPTS.parents[3]
 OUT_DIR = PROJECT_ROOT / "data" / "outreach"
@@ -112,22 +111,13 @@ def save_state(state):
     STATE_FILE.write_text(json.dumps(state, indent=2))
 
 
-def lint_email_assets(email):
-    """Return list of issues across the 4 emails (empty = pass)."""
-    issues = []
-    steps = []
-    for i in range(1, 5):
-        subj, body = email.get(f"subject{i}", ""), email.get(f"body{i}", "")
-        if not subj or not body:
-            issues.append(f"missing subject{i}/body{i}")
-        steps.append({"n": i, "subject": subj, "body": body})
-    if issues:
-        return issues
-    issues += L.sequence_issues(steps)
-    for idx, step in enumerate(steps):
-        _, step_issues = L.lint_email(step, is_last=(idx == len(steps) - 1), is_first=(idx == 0))
-        issues += [f"step{step['n']}: {it}" for it in step_issues]
-    return issues
+def lint_email_assets(email, variant=None):
+    """Return list of issues across the 4 emails (empty = pass). Variant-aware:
+    delegates to generate_batch.lint_assets so erp-trigger assets are checked
+    against the trigger linter, not the canonical-path structure rules — the
+    same source of truth generation and ingest use."""
+    import generate_batch as G
+    return G.lint_assets({"variant": variant or "value-give", "email": email})
 
 
 def bison_custom_vars(email):
@@ -217,7 +207,7 @@ def main():
         email, linkedin = asset.get("email", {}), asset.get("linkedin", {})
 
         if not no_lint:
-            issues = lint_email_assets(email)
+            issues = lint_email_assets(email, variant=asset.get("variant"))
             if issues:
                 res["counts"]["skipped_lint"] = 1
                 res["logs"].append(f"  ✗ {contact.get('email')} [{contact.get('persona')}] FAILED lint:")

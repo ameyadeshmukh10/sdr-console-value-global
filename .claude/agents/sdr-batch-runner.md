@@ -45,7 +45,9 @@ service** (delivered on the ROAD platform by InfoCorvus) and nothing else.
 
 ## Copy rules (every email — enforced by the linter at ingest)
 - Subject 1 is `What's it costing to keep data nobody touches?` unless a trigger play supplies
-  its own; subjects 2-4 are `RE:` plus subject 1, verbatim.
+  its own. Every touch lands as its own standalone email, never a threaded reply: subjects 2-4
+  are each a distinct plain subject line (no `RE:` prefix, never reuse a subject) naming that
+  touch's give.
 - 4 emails, each body **35–110 words**, short paragraphs separated by a blank line (`\n\n`).
 - **No sign-off and no trailing first name** (the campaign appends the signature). End on the ask.
 - **NEVER use em dashes (—) or en dashes (–).** Use commas/periods (hyphens like month-end are fine).

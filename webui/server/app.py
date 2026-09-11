@@ -581,6 +581,49 @@ def outreach_detail(contact_id):
 
     def meta(k):  # contacts.jsonl first, DB fallback (sourced contacts are DB-only)
         return jm.get(k) or dbm.get(k) or ""
+
+    # The full account research behind the one-line asset signal, so a reviewer
+    # sees the same rich context the Signals drawer shows: the composite signal
+    # paragraph + the winning trigger verdict (headline, evidence, source).
+    email_addr = meta("email")
+    domain = ((dbm.get("domain") or "").strip()
+              or (email_addr.rsplit("@", 1)[-1] if "@" in email_addr else "")).lower()
+    account_signal = None
+    if domain:
+        row = None
+        try:
+            with db_connect() as conn:
+                r = conn.execute(
+                    "SELECT signal, company_name, researched_at, updated_at, news_detail "
+                    "FROM account_signals WHERE domain=?", (domain,)).fetchone()
+                row = dict(r) if r else None
+        except sqlite3.Error:
+            row = None
+        if row:
+            seg = dbm.get("segment") or asset.get("segment") or ""
+            trigger = None
+            try:
+                triggers = (json.loads(row.get("news_detail") or "{}") or {}).get("triggers") or {}
+                v = triggers.get(seg)
+                if isinstance(v, dict) and v.get("found"):
+                    trigger = {
+                        "segment": seg,
+                        "label": SEGMENT_LABELS.get(seg, seg),
+                        "headline": v.get("headline") or "",
+                        "summary": v.get("summary") or "",
+                        "date": v.get("date") or "",
+                        "source_url": v.get("source_url") or "",
+                        "score": v.get("score"),
+                    }
+            except (ValueError, TypeError):
+                trigger = None
+            if row.get("signal") or trigger:
+                account_signal = {
+                    "domain": domain,
+                    "signal": row.get("signal") or "",
+                    "researched_at": row.get("researched_at") or row.get("updated_at"),
+                    "trigger": trigger,
+                }
     return {
         "contact": {
             "contact_id": str(contact_id),
@@ -601,6 +644,7 @@ def outreach_detail(contact_id):
             "approved_at": dbm.get("approved_at"),
         },
         "signal": asset.get("signal", ""),
+        "account_signal": account_signal,
         "cta_type": derive_cta(asset),
         "variant": asset.get("variant") or dbm.get("variant") or "",
         "edited_at": asset.get("edited_at"),

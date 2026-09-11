@@ -16,14 +16,18 @@ client decision: write to the role, not a seniority script.
 ## Subject rule
 - Subject 1 is the approved line, verbatim: **What's it costing to keep data nobody touches?**
   (A trigger play may supply its own subject 1.) It is field-tested; do not replace it casually.
-- Subjects 2-4 are `RE: ` + subject 1, verbatim. The thread is the asset.
+- **Every touch lands as its own standalone email, never a threaded reply.** Subjects 2-4 are
+  each a distinct plain subject line: no `RE:` prefix, never reuse a subject. Name that touch's
+  give in a few plain words (touch 2 the assessment, touch 3 the 20 minutes, touch 4 the
+  goodbye), e.g. "A number for what dormant ERP data costs" / "20 minutes to scope the
+  assessment" / "Last note from me".
 
 ## The 4-touch structure
 | Step | Job | CTA |
 |---|---|---|
 | 1 | Question opener: the cost-of-cold-data question, the 10/20/70 pattern stated about long-running EBS systems in general (never the recipient's), anchored to the person's verifiable role; name the detected ERP naturally when one is provided | The POV send-over ask only: "Want me to send it over?" or "Does that match what you are seeing?" |
 | 2 | The cost of doing nothing: the hardware treadmill, close and DR windows stretching, "hardware buys time, not a fix"; then the free Data Lifecycle Assessment described by its five deliverables | Propose the assessment + the link www.valueglobal.net/archiving-solutions |
-| 3 | No new argument, no new proof; short and specific | A 20-minute call to set the assessment up, two windows named in prose, never a booking link |
+| 3 | No new argument, no new proof; short and specific | A 20-minute call to set the assessment up, two windows named in prose as weekday + time of day only ("Tuesday morning or Thursday afternoon", never "this week", today, or a calendar date: the email sends days after it is written), never a booking link |
 | 4 | The breakup: concede timing, no pressing; leave the read on the table for them "or on someone else's desk" | "Reply any time and I will send it" |
 
 ## Per-email recipe — short paragraphs separated by BLANK LINES
