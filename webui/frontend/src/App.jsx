@@ -30,15 +30,17 @@ const ICONS = {
   '/outreach': <svg {...ICO}><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3 7 9 6 9-6" /></svg>,
 }
 
+// Ordered to follow the operator's actual flow: feed the pipeline → watch it →
+// review outreach → inspect signals → handle replies → measure → configure.
 const NAV = [
   { to: '/', ico: '▶', label: 'Use', end: true },
   { to: '/pipeline', ico: '⟳', label: 'Pipeline' },
-  { to: '/diagram', ico: '◉', label: 'Orchestration' },
+  { to: '/outreach', ico: '✉', label: 'Outreach' },
+  { to: '/signals', ico: '⚡', label: 'Signals' },
+  { to: '/replies', ico: '✦', label: 'Replies' },
   { to: '/analytics', ico: '▦', label: 'Analytics' },
   { to: '/trends', ico: '★', label: 'Trends' },
-  { to: '/replies', ico: '✦', label: 'Replies' },
-  { to: '/signals', ico: '⚡', label: 'Signals' },
-  { to: '/outreach', ico: '✉', label: 'Outreach' },
+  { to: '/diagram', ico: '◉', label: 'Orchestration' },
 ]
 
 // One-time durability check: if the server says the data dir looks non-durable

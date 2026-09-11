@@ -335,6 +335,36 @@ triggers, via the Anthropic Messages API + server-side `web_search` (the same ch
   erp-trigger path — but since 2026-09 it DOES reach news research indirectly: a fresh
   composite in `signal` is reused as its cached research (see the composite bullet).
 
+## Agent studio — editable instructions (Orchestration view, added 2026-09)
+
+The Orchestration view is the operator's editing surface for how the AI SDR thinks:
+custom ICP keywords, per-persona framing (pain/outcome), the five ERP trigger plays,
+and the knowledge-base markdown (offer.md / cta-offers.md / icp-email.md) — all
+editable in plain language, no code.
+
+- **Override layer:** `data/outreach/instructions/` on the volume (gitignored),
+  managed by `ai-sdr/scripts/instructions.py` (stdlib-only; `INSTRUCTIONS_DIR` env
+  override for tests). Readers NEVER raise and fall back to the committed defaults
+  on any problem — an absent/broken layer means exactly the pre-studio behavior.
+  Writers are the web server only (atomic replace under `INSTR_LOCK`).
+- **Consumers:** `generate_batch.load_knowledge()` (knowledge doc overrides),
+  `erp_play()` (per-field play merge), `persona_framing()` (composed from persona
+  pain/outcome edits); `buyer_group.buyer_role()` reads custom include/exclude
+  keywords per call (custom excludes run before everything, custom includes only
+  after every built-in bucket fails — precedence never changes);
+  `orchestration_config` renders EFFECTIVE docs + overlays persona edits so the
+  view never shows text the pipeline stopped using.
+- **Endpoints:** `GET /api/instructions` (defaults + overrides + meta),
+  `POST /api/instructions/save` `{kind: persona|play|knowledge|icp, key, content}`
+  (validated; returns soft warnings, e.g. banned terms in a knowledge edit),
+  `POST /api/instructions/reset` `{kind, key}`, `GET /api/instructions/icp-test
+  ?title=` (classify a title with the live rules).
+- **Deliberately NOT editable:** `lint_sequence.py` and the suppression gates —
+  every generated email still passes the linter regardless of edits, so a bad edit
+  surfaces as lint failures in Pipeline/Outreach, never as a bad send.
+- **Edits apply to the NEXT generation run** — already-generated copy is unchanged
+  until regenerated (the UI says so on every save).
+
 ## Gated approval flow — segments → review → enroll (added 2026-09)
 
 User-approved workflow change: manual list pulls + CSV uploads stop at TWO human gates;

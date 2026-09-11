@@ -2,10 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { Stat, Spinner, ErrorBanner, num, EmailIcon, LinkedInIcon, LINKEDIN_BLUE } from '../components/ui.jsx'
 import { BRAND, PERSONA_COLORS } from '../theme.js'
-import {
-  SectionCard, PipelineSection, IcpFilterSection, PersonaAgentsSection,
-  SequencingSection, KnowledgeSection, GuardrailsSection, SignalsSection,
-} from '../components/OrchestrationSections.jsx'
+import AgentStudio from '../components/AgentStudio.jsx'
 
 // Pillar 2 — See: how the pipeline WORKS (not how much it processed).
 // HubSpot -> ICP filter -> agent orchestrator -> persona agents -> Email + LinkedIn,
@@ -61,7 +58,7 @@ export default function DiagramPage() {
   const [config, setConfig] = useState(null)
   const [error, setError] = useState(null)
   const [hover, setHover] = useState(null)        // persona id being hovered
-  const [expanded, setExpanded] = useState(() => new Set())
+  const [studioTab, setStudioTab] = useState('overview')
   const [unenroll, setUnenroll] = useState(null)  // unenrollment checker status
   const [runBusy, setRunBusy] = useState(false)   // one global run at a time
   const [runMsg, setRunMsg] = useState(null)
@@ -73,13 +70,10 @@ export default function DiagramPage() {
     api.unenrollStatus().then(setUnenroll).catch(() => {})
   }, [])
 
-  function toggleSection(id) {
-    setExpanded((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
+  // Diagram-node click -> the matching Agent studio tab.
+  const NODE_TAB = {
+    pipeline: 'overview', signals: 'overview', guardrails: 'knowledge',
+    icp: 'icp', personas: 'personas', sequencing: 'sequencing', knowledge: 'knowledge',
   }
 
   function openSection(id) {
@@ -87,9 +81,8 @@ export default function DiagramPage() {
       sectionRefs.current.unenroll?.scrollIntoView({ behavior: 'smooth', block: 'start' })
       return
     }
-    setExpanded((prev) => new Set(prev).add(id))
-    // let the section body mount before scrolling to it
-    setTimeout(() => sectionRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60)
+    setStudioTab(NODE_TAB[id] || 'overview')
+    setTimeout(() => sectionRefs.current.studio?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60)
   }
 
   const dim = (p) => hover && hover !== p
@@ -154,15 +147,6 @@ export default function DiagramPage() {
     style: { cursor: 'pointer' },
   })
 
-  const sections = [
-    { id: 'pipeline', title: 'Pipeline stages & agent routing', sub: 'sdr-pipeline SKILL.md · live', C: PipelineSection, data: config?.pipeline },
-    { id: 'icp', title: 'ICP filter — who gets written to', sub: 'buyer_group.py · live', C: IcpFilterSection, data: config?.icp_filter },
-    { id: 'personas', title: 'Persona agents', sub: '.claude/agents · live', C: PersonaAgentsSection, data: config?.personas },
-    { id: 'sequencing', title: 'Sequencing & CTA offers', sub: 'icp-email.md · cta-offers.md · live', C: SequencingSection, data: config?.sequencing },
-    { id: 'knowledge', title: 'Knowledge base', sub: 'offer.md · live', C: KnowledgeSection, data: config?.knowledge },
-    { id: 'guardrails', title: 'Guardrails', sub: 'lint_sequence.py · icp-email.md · live', C: GuardrailsSection, data: config?.guardrails },
-    { id: 'signals', title: 'Signal intelligence', sub: 'technographics + hiring config · live', C: SignalsSection, data: config?.signals },
-  ]
   const failedSections = Object.keys(config?.errors || {})
 
   return (
@@ -305,20 +289,17 @@ export default function DiagramPage() {
         </div>
       </div>
 
-      {/* ---- under the hood: live config sections -------------------------- */}
-      <div className="section-h" style={{ marginTop: 18 }}>Under the hood</div>
+      {/* ---- Agent studio: read + edit how the agents think ----------------- */}
       {!config && !error && <Spinner label="Loading pipeline config…" />}
       {failedSections.length > 0 && (
-        <p className="muted" style={{ fontSize: 12 }}>
+        <p className="muted" style={{ fontSize: 12, marginTop: 14 }}>
           Some sections could not be parsed from the repo sources: {failedSections.join(', ')}.
         </p>
       )}
-      {config && sections.map(({ id, title, sub, C, data }) => (
-        <SectionCard key={id} id={id} title={title} sub={sub} open={expanded.has(id)}
-          onToggle={toggleSection} innerRef={(el) => { sectionRefs.current[id] = el }}>
-          <C data={data} />
-        </SectionCard>
-      ))}
+      {config && (
+        <AgentStudio config={config} activeTab={studioTab} onTab={setStudioTab}
+          innerRef={(el) => { sectionRefs.current.studio = el }} />
+      )}
 
       {/* Suppression rules — one data-driven card per rule the checker enforces. */}
       {unenroll && (

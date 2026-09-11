@@ -30,6 +30,7 @@ sys.path.insert(0, str(HERE))                               # batch_db
 sys.path.insert(0, str(SKILLS / "ai-sdr" / "scripts"))      # anthropic_client, lint_sequence
 
 import batch_db as db                                        # noqa: E402
+import instructions as I                                     # noqa: E402
 import lint_sequence as L                                    # noqa: E402
 from anthropic_client import (                               # noqa: E402
     AnthropicClient, extract_json, parse_message, AnthropicError, AnthropicJSONError,
@@ -345,8 +346,44 @@ plus 3 LinkedIn touches anchored on that trigger.
 """ + OUTPUT_SCHEMA
 
 
+def erp_play(segment):
+    """The effective play for a segment: the committed text with any operator
+    edits (Orchestration view) merged per field. Falls back to the committed
+    play on any override problem."""
+    play = dict(ERP_PLAYS[segment])
+    try:
+        play.update(I.play_overrides().get(segment, {}))
+    except Exception:  # noqa: BLE001 — overrides must never break generation
+        pass
+    return play
+
+
+def persona_framing(persona):
+    """The effective persona framing line for the prompt: the uniform default,
+    or one composed from the operator's per-persona pain/outcome edits."""
+    base = PERSONA_FRAMING.get(persona, PERSONA_FRAMING["it-leadership"])
+    try:
+        o = I.persona_overrides().get(persona) or {}
+    except Exception:  # noqa: BLE001
+        return base
+    if not o:
+        return base
+    pain = o.get("pain")
+    outcome = o.get("outcome")
+    parts = []
+    if pain:
+        parts.append(f"Frame the pain as: {pain}")
+    if outcome:
+        parts.append(f"The outcome to sell: {outcome}")
+    parts.append(
+        "Gives: touch 1 the short POV read (send-over ask only), touch 2 the free Data "
+        "Lifecycle Assessment, touch 3 a 20-minute call to set it up, touch 4 a breakup that "
+        "leaves the read on the table. Write to the role in the title, not a seniority script.")
+    return " ".join(parts)
+
+
 def build_erp_user(contact, segment, verdict, tech_line=None, prior_issues=None):
-    play = ERP_PLAYS[segment]
+    play = erp_play(segment)
     details = verdict.get("details") or {}
     base = (
         f"Contact:\n"
@@ -494,7 +531,9 @@ Return ONLY this JSON, no prose:
 def load_knowledge():
     parts = []
     for fname in ("offer.md", "cta-offers.md", "icp-email.md"):
-        parts.append((KNOWLEDGE_DIR / fname).read_text())
+        # Operator edits (Orchestration view) override the committed file;
+        # any problem with the override layer falls back to the repo copy.
+        parts.append(I.knowledge_override(fname) or (KNOWLEDGE_DIR / fname).read_text())
     if EXAMPLE.is_file():
         parts.append("# Reference sequence (emulate the shape, never copy specifics)\n\n"
                      + EXAMPLE.read_text())
@@ -546,7 +585,7 @@ def erp_mention_block(tech_line):
 def build_user(contact, cached_signal=None, prior_issues=None, tech_signals=None,
                tech_playbook=None, hiring_signals=None):
     persona = contact.get("persona", "it-leadership")
-    framing = PERSONA_FRAMING.get(persona, PERSONA_FRAMING["it-leadership"])
+    framing = persona_framing(persona)
     domain = contact.get("domain") or db.email_domain(contact.get("email"))
     base = (
         f"Contact:\n"

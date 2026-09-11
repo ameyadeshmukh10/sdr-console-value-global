@@ -65,6 +65,11 @@ export const api = {
     return get('/api/batches?' + q.toString())
   },
   orchestrationConfig: () => get('/api/orchestration/config'),
+  // Agent instructions (Orchestration studio) — editable overrides + defaults.
+  instructions: () => get('/api/instructions'),
+  saveInstructions: (body) => post('/api/instructions/save', body),
+  resetInstructions: (body) => post('/api/instructions/reset', body),
+  icpTest: (title) => get('/api/instructions/icp-test?title=' + encodeURIComponent(title)),
   analytics: () => get('/api/analytics'),
   refreshAnalytics: () => post('/api/analytics/refresh'),
   linkedinAnalytics: () => get('/api/analytics/linkedin'),
