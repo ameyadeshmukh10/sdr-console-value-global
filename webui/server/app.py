@@ -218,12 +218,11 @@ _AUTH_ITERATIONS = 240000
 _AUTH_TOKEN_TTL = 7 * 24 * 3600  # 7 days
 
 # email (lowercased) -> (salt_hex, pbkdf2_sha256_hex). Hashes only — no plaintext.
+# Keep at least one entry: these are the accounts that cannot be locked out from
+# the Admin view, so an empty table would leave the console recoverable only by a
+# code change. Everyone else gets a login created in the Admin view instead.
 _USERS = {
     "ameya.deshmukh@everworker.ai": ("5101ada9dcb0404b5c6dcc1429de8223", "4971b8475fa88f188700a9504b891cad6277cd98fd338897004c7bba0978d85c"),
-    "lucas.cowell@everworker.ai": ("e6d20cfb46294a3ae4d2b5246e1965c3", "4bdc195d7ad3c18ec8a7ddb29dabb77ea6a979083b2924c08b10b65018755f5b"),
-    "alex.purtell@everworker.ai": ("7c9f90584312041c8bfe5bf0c226c080", "3d3c65fadd0e5635ab6c9b02544e6fdf49fc68f7bda6d6f665acdc57d40e94fe"),
-    "demo@everworker.ai": ("67451f9a6a3505c9b880939b1c10ec19", "0bcf72b83a13b44146dc644e5d151e9024b6e137cd8e807d61d645fd01b69452"),
-    "sales@everworker.ai": ("09ec9dd545d4f62d23614cb869866130", "5d846a99028b8c1a5a31dcea0cb4713624dd722ff3fdb649360e53d42ccda611"),
 }
 
 # Per-method exact-match auth exemptions (NOT prefix — that would leak siblings
