@@ -582,6 +582,43 @@ contact CSV, name it, and it lands as a named **audience** of pipeline batches.
   UI: Use view "CSV Upload" panel (file + name → summary banner; audiences table with
   status chips, inline rename, expandable contact list).
 
+## Console logins — the Admin view (added 2026-09)
+
+The login gate accepts users from TWO sources, checked in this order by
+`verify_credentials()`:
+
+1. **Built-in** — `_USERS` in `app.py` (email → salted PBKDF2-SHA256 digest, 240k
+   iterations). Defined in code, **always admins**, and deliberately immutable at
+   runtime: `admin_user_action` refuses any create/edit/delete naming one (409). That
+   is the lock-out backstop — a bad edit in the Admin view can never orphan the console.
+2. **Managed** — `webui/server/user_store.py` → `data/outreach/users.json` on the
+   volume (gitignored; `USER_STORE_PATH` override for tests). Same hash parameters, so
+   both sources verify through identical code. Records: `{email, salt, hash, role,
+   created_at/by, password_changed_at/by, role_changed_at/by}`. Reads NEVER raise (a
+   missing or corrupt file reads as zero users → those logins simply stop working, the
+   built-ins still do); writes are atomic-replace under a module lock, chmod 0600.
+
+- **Roles:** `admin` (may manage logins) | `member` (everything else the console does).
+  `user_role()` / `is_admin()` in `app.py` are the only readers. Rules that cannot be
+  edited around: min 10-char password, no leading/trailing whitespace, no self
+  role-change, no self-delete, no duplicate email (case-insensitive).
+- **Endpoints:** `GET /api/me` (any logged-in caller — `{email, role, is_admin,
+  builtin}`), `GET /api/admin/users`, and `POST /api/admin/users/{create|password|
+  role|delete}` (email in the BODY, never the path — emails don't belong in a URL
+  segment). Every `/api/admin/*` route calls `self._require_admin()` **on top of** the
+  usual bearer gate → 403 for a member's valid token. `POST /api/login` now also
+  returns `role`/`is_admin`.
+- **UI:** `pages/AdminPage.jsx` — create form (email + password + confirm + role) and a
+  table with per-row set-password (own expanded row) / role select / delete. Nav item
+  sits BELOW the sidebar spacer (bottom), rendered only when `useAuth().isAdmin`;
+  `AuthContext` caches the role in localStorage and re-reads `/api/me` on mount so a
+  pre-existing session (or a role an admin just changed) resolves correctly. A catch-all
+  route sends anything unrouted to `/` — notably `/admin` for a member.
+- **Gotchas:** hiding the nav item is convenience, not security — the server re-checks
+  the role on every call. Passwords are never returned or logged; there is no self-serve
+  reset, so an admin sets a new one from the table. `python3 webui/server/user_store.py
+  --self-test` is offline (no server, no network).
+
 ## Background jobs (daemon threads started in `app.py main()`)
 
 1. `_activity_autosync_loop` — hourly: logs new email/LinkedIn activity to HubSpot.
@@ -615,6 +652,7 @@ env -u PORT python3 webui/server/app.py --port 8787   # boots WITHOUT pymongo/MO
 cd webui/frontend && npm ci && npm run build           # SPA build (Dockerfile stage 1)
 python3 .claude/skills/sdr-pipeline/scripts/tech_signals.py --self-test   # offline detector check
 python3 .claude/skills/sdr-pipeline/scripts/hiring_signals.py --self-test # offline hiring-classifier check
+python3 webui/server/user_store.py --self-test         # offline console-login store check
 ```
 The server must always boot with `MONGO_URL` unset (aisdr endpoints return
 `{"configured": false}`, nightly loop self-disables) — preserve that when touching

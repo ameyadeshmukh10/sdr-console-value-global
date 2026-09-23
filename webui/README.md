@@ -84,6 +84,16 @@ npm --prefix webui/frontend run dev              # dev server with /api proxy
    bulk "Detect hiring"), and the **News** column — the five web-researched ERP triggers (M&A
    carve-out, ERP migration, license audit, EBS on OCI, EBS performance; 30-day cache; drawer
    **⌕ Research news** shows the per-trigger scores/sources, bulk "Research news" backfills).
+9. **Admin** (`/admin`, bottom of the nav, **admins only**) — who can sign in to the console.
+   Create an email + password login for a teammate (role **admin** = may also manage logins,
+   or **member** = everything else), reset a password, change a role, or delete a login.
+   Accounts are stored as salted PBKDF2-SHA256 digests in `data/outreach/users.json` on the
+   volume — never plaintext, and never shown again after creation, so hand the password over
+   a channel you trust. The **built-in** logins (hard-coded in `webui/server/app.py`) are
+   always admins and listed read-only: only a code change alters them, which is what stops a
+   bad edit here from locking everyone out. You cannot change your own role or delete your
+   own login. The nav item is hidden from members, but that is convenience only — the server
+   re-checks the caller's role on every `/api/admin/*` call (403 otherwise).
 
 ### Cost: Message Batches API (50% off, async)
 The Pipeline tab also has a **Batch API** panel: submit N pending batches to Anthropic's Message

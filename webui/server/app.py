@@ -206,6 +206,13 @@ def read_env():
 # is generated at startup, which means every restart invalidates outstanding
 # tokens (everyone simply logs in again) — set AUTH_SECRET_KEY in production so
 # sessions survive redeploys.
+#
+# Two sources of accounts, checked in this order:
+#   1. _USERS below — the BUILT-IN logins, defined in code, always admins. They
+#      cannot be edited or deleted at runtime, so the console can never be
+#      locked out of its own Admin view.
+#   2. USER_STORE (webui/server/user_store.py) — the logins an admin creates in
+#      the Admin view, persisted to data/outreach/users.json on the volume.
 # ----------------------------------------------------------------------------
 _AUTH_ITERATIONS = 240000
 _AUTH_TOKEN_TTL = 7 * 24 * 3600  # 7 days
@@ -245,17 +252,41 @@ def _auth_secret():
 _AUTH_SECRET = _auth_secret()
 
 
+import user_store                     # noqa: E402  (stdlib only, no I/O at import)
+USER_STORE = user_store.UserStore(user_store.default_path(DATA), reserved=_USERS)
+
+
 def verify_credentials(email, password):
-    """True iff (email, password) matches an accepted user. Email is matched
-    case-insensitively; the password is not. Constant-time hash comparison."""
+    """True iff (email, password) matches an accepted user — a built-in login or
+    one created in the Admin view. Email is matched case-insensitively; the
+    password is not. Constant-time hash comparison."""
     rec = _USERS.get((email or "").strip().lower())
-    if not rec:
+    if rec:
+        salt_hex, hash_hex = rec
+        dk = hashlib.pbkdf2_hmac(
+            "sha256", (password or "").encode("utf-8"),
+            bytes.fromhex(salt_hex), _AUTH_ITERATIONS)
+        return hmac.compare_digest(dk.hex(), hash_hex)
+    try:
+        return USER_STORE.verify(email, password) is not None
+    except OSError as e:              # unreadable store — deny, never 500
+        sys.stderr.write(f"[auth] user store unreadable: {e}\n")
         return False
-    salt_hex, hash_hex = rec
-    dk = hashlib.pbkdf2_hmac(
-        "sha256", (password or "").encode("utf-8"),
-        bytes.fromhex(salt_hex), _AUTH_ITERATIONS)
-    return hmac.compare_digest(dk.hex(), hash_hex)
+
+
+def user_role(email):
+    """'admin' | 'member' | None (no such account). Built-ins are always admins."""
+    email = (email or "").strip().lower()
+    if email in _USERS:
+        return "admin"
+    try:
+        return USER_STORE.role_of(email)
+    except OSError:
+        return None
+
+
+def is_admin(email):
+    return user_role(email) == "admin"
 
 
 def make_token(email):
@@ -289,6 +320,54 @@ def bearer_from_headers(headers):
     """Extract the bearer token from an Authorization header, or None."""
     raw = headers.get("Authorization", "") or ""
     return raw[7:].strip() if raw.startswith("Bearer ") else None
+
+
+# ----------------------------------------------------------------------------
+# Admin — console logins (Admin view). Admin-only: every /api/admin/* route is
+# gated on user_role(caller) == "admin" ON TOP of the usual bearer check, so a
+# member's valid token cannot reach these. Built-in logins are listed read-only.
+# ----------------------------------------------------------------------------
+
+def me_payload(email):
+    """Who the bearer token belongs to — drives the Admin nav item's visibility."""
+    role = user_role(email) or "member"
+    return {"ok": True, "email": email, "role": role, "is_admin": role == "admin",
+            "builtin": (email or "").strip().lower() in _USERS}
+
+
+def admin_users_payload():
+    """Every console login: the built-ins (read-only, always admins) first, then
+    the ones created here. Never includes a salt or password digest."""
+    builtin = [{"email": e, "role": "admin", "builtin": True, "created_at": None,
+                "created_by": None, "password_changed_at": None} for e in sorted(_USERS)]
+    return {"ok": True, "users": builtin + USER_STORE.list(),
+            "roles": list(user_store.ROLES),
+            "min_password": user_store.MIN_PASSWORD}
+
+
+def admin_user_action(action, body, by):
+    """Apply one admin action. Raises user_store.UserError on a rejected request;
+    the caller turns that into the right HTTP status."""
+    email = user_store.normalize_email(body.get("email"))
+    if email in _USERS:
+        raise user_store.UserError(
+            "that login is built into the app — it can only be changed in the code", 409)
+    if action == "create":
+        user = USER_STORE.create(email, body.get("password"),
+                                 body.get("role") or "member", by=by)
+        return {"ok": True, "user": user}
+    # Everything below edits an existing login. Guard the two ways an admin
+    # could lock themselves (and possibly everyone else) out of this view.
+    if email == user_store.normalize_email(by) and action in ("delete", "role"):
+        raise user_store.UserError("you can't change your own role or delete your own login")
+    if action == "password":
+        return {"ok": True, "user": USER_STORE.set_password(email, body.get("password"), by=by)}
+    if action == "role":
+        return {"ok": True, "user": USER_STORE.set_role(email, body.get("role"), by=by)}
+    if action == "delete":
+        USER_STORE.delete(email)
+        return {"ok": True, "email": email}
+    raise user_store.UserError("unknown admin action", 404)
 
 
 def _campaign_int(raw):
@@ -4615,6 +4694,15 @@ class Handler(BaseHTTPRequestHandler):
         host = (h.get("X-Forwarded-Host") or h.get("Host") or "").split(",")[0].strip()
         return f"{proto}://{host}" if host else None
 
+    def _require_admin(self):
+        """The caller's email if they are an admin, else None with a 403 already
+        sent — every /api/admin/* route calls this on top of the bearer gate."""
+        me = verify_token(bearer_from_headers(self.headers))
+        if not is_admin(me):
+            self._error(403, "this action requires an admin login")
+            return None
+        return me
+
     def _read_body(self):
         length = int(self.headers.get("Content-Length", 0) or 0)
         if not length:
@@ -4665,6 +4753,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True})
             if path == "/api/status":
                 return self._json(db_status())
+            if path == "/api/me":
+                return self._json(me_payload(verify_token(bearer_from_headers(self.headers))))
+            if path == "/api/admin/users":
+                me = self._require_admin()
+                if not me:
+                    return None
+                return self._json(admin_users_payload())
             if path == "/api/system/status":
                 return self._json(system_status_payload())
             if path == "/api/batches":
@@ -4870,7 +4965,18 @@ class Handler(BaseHTTPRequestHandler):
                 if not verify_credentials(email, password):
                     time.sleep(0.5)  # blunt online password guessing
                     return self._error(401, "invalid credentials")
-                return self._json({"ok": True, "token": make_token(email), "email": email})
+                role = user_role(email) or "member"
+                return self._json({"ok": True, "token": make_token(email), "email": email,
+                                   "role": role, "is_admin": role == "admin"})
+            if path.startswith("/api/admin/users/"):
+                me = self._require_admin()
+                if not me:
+                    return None
+                action = path[len("/api/admin/users/"):]
+                try:
+                    return self._json(admin_user_action(action, self._read_body(), by=me))
+                except user_store.UserError as e:
+                    return self._error(e.code, str(e))
             if path == "/api/ingest":
                 body = self._read_body()
                 list_id = str(body.get("list_id", "")).strip()
