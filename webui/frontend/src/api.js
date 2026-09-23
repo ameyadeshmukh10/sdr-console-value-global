@@ -57,6 +57,13 @@ async function post(path, body) {
 
 export const api = {
   login: (email, password) => post('/api/login', { email, password }),
+  me: () => get('/api/me'),
+  // Admin view — console logins. Every /api/admin/* route is admin-only (403).
+  adminUsers: () => get('/api/admin/users'),
+  adminCreateUser: (email, password, role) => post('/api/admin/users/create', { email, password, role }),
+  adminSetPassword: (email, password) => post('/api/admin/users/password', { email, password }),
+  adminSetRole: (email, role) => post('/api/admin/users/role', { email, role }),
+  adminDeleteUser: (email) => post('/api/admin/users/delete', { email }),
   status: () => get('/api/status'),
   batches: (status, limit) => {
     const q = new URLSearchParams()

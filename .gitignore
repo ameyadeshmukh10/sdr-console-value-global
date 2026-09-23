@@ -2,6 +2,8 @@
 .env
 # Clay OAuth tokens (access + refresh) live here:
 data/outreach/clay_oauth.json
+# Console logins created in the Admin view (salted password digests, no plaintext)
+data/outreach/users.json
 # Transient Clay sourcing job candidate files:
 data/outreach/source-jobs/
 # SLA rules + pull history (runtime state on the volume)

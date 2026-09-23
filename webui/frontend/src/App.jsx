@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { NavLink, Route, Routes } from 'react-router-dom'
+import { NavLink, Navigate, Route, Routes } from 'react-router-dom'
 import { api } from './api.js'
 import { useAuth } from './AuthContext.jsx'
 import { BrandLogo } from './components/BrandLogo.jsx'
@@ -12,6 +12,7 @@ import TrendsPage from './pages/TrendsPage.jsx'
 import OutreachPage from './pages/OutreachPage.jsx'
 import RepliesPage from './pages/RepliesPage.jsx'
 import SignalsPage from './pages/SignalsPage.jsx'
+import AdminPage from './pages/AdminPage.jsx'
 
 // Inline stroke icons for the nav, keyed by route. `currentColor` lets them
 // inherit the existing nav-link color and hover/active states for free.
@@ -28,6 +29,7 @@ const ICONS = {
   '/replies': <svg {...ICO}><path d="M21 15a2 2 0 0 1-2 2H8l-4 4V6a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z" /></svg>,
   '/signals': <svg {...ICO}><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z" /></svg>,
   '/outreach': <svg {...ICO}><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3 7 9 6 9-6" /></svg>,
+  '/admin': <svg {...ICO}><path d="M12 3l7 3v5.5c0 4.2-2.9 7.7-7 8.5-4.1-.8-7-4.3-7-8.5V6z" /><circle cx="12" cy="10.5" r="2" /><path d="M8.6 16.2a3.6 3.6 0 0 1 6.8 0" /></svg>,
 }
 
 // Ordered to follow the operator's actual flow: feed the pipeline → watch it →
@@ -42,6 +44,10 @@ const NAV = [
   { to: '/trends', ico: '★', label: 'Trends' },
   { to: '/diagram', ico: '◉', label: 'Orchestration' },
 ]
+
+// Sits at the BOTTOM of the nav, below the spacer — it administers the console
+// itself rather than the pipeline. Admins only; the server enforces that too.
+const ADMIN_NAV = { to: '/admin', ico: '⚙', label: 'Admin' }
 
 // One-time durability check: if the server says the data dir looks non-durable
 // (no Railway Volume at /app/data), warn on every page — everything the console
@@ -61,7 +67,7 @@ function VolumeBanner() {
 }
 
 export default function App() {
-  const { token, email, logout } = useAuth()
+  const { token, email, isAdmin, logout } = useAuth()
   if (!token) return <LoginPage />
   return (
     <div className="app">
@@ -77,6 +83,12 @@ export default function App() {
           </NavLink>
         ))}
         <div className="spacer" />
+        {isAdmin && (
+          <NavLink to={ADMIN_NAV.to}
+            className={({ isActive }) => 'nav-link' + (isActive ? ' active' : '')}>
+            <span className="ico">{ICONS[ADMIN_NAV.to]}</span>{ADMIN_NAV.label}
+          </NavLink>
+        )}
         <div className="signed-in">
           <span className="who" title={email}>{email}</span>
           <button className="signout" onClick={logout}>Sign out</button>
@@ -93,6 +105,10 @@ export default function App() {
           <Route path="/replies" element={<RepliesPage />} />
           <Route path="/signals" element={<SignalsPage />} />
           <Route path="/outreach" element={<OutreachPage />} />
+          {isAdmin && <Route path="/admin" element={<AdminPage />} />}
+          {/* Anything unrouted lands on Use — notably /admin for a member, who
+              has no such route and would otherwise get an empty page. */}
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
     </div>
