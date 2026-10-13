@@ -309,6 +309,7 @@ def cmd_enroll(args):
         p = db.GEN_DIR / f"{r['contact_id']}.json"
         if not p.is_file():
             counts["missing_file"] += 1
+            print(f"  [missing-file] {r['email']} — no generated copy file for contact {r['contact_id']}")
             continue
         asset = json.loads(p.read_text())
         # route by instruction variant (one campaign per variant); persona is the fallback
@@ -316,6 +317,8 @@ def cmd_enroll(args):
         campaign = E.bison_campaign_for_variant(variant) or E.bison_campaign_for(r["persona"])
         if not campaign:
             counts["no_campaign"] += 1
+            print(f"  [no-campaign] {r['email']} [{r['persona']}] — no Bison campaign configured "
+                  f"(set BISON_CAMPAIGN_ID or the persona/variant campaign env)")
             continue
         tasks.append((r, campaign, E.bison_custom_vars(asset["email"])))
         if hr_enabled:

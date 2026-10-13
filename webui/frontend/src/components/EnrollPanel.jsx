@@ -99,8 +99,27 @@ export default function EnrollPanel({ generatedReady, awaitingApproval = 0, onCh
             {Object.entries(byCampaign).map(([c, n]) => (
               <span key={c} className="badge">campaign {c} ({CAMPAIGN_PERSONA[c] || '?'}): {n}</span>
             ))}
-            {preview.rows.length === 0 && <span className="muted">No contacts in <span className="mono">generated</span> status.</span>}
           </div>
+          {preview.rows.length === 0 && (
+            <div className="banner info" style={{ marginBottom: 12 }}>
+              {generatedReady > 0
+                ? <>None of the <b>{num(generatedReady)}</b> approved contacts can be enrolled right now. Why:</>
+                : <>No contacts in <span className="mono">generated</span> status.</>}
+              {preview.counts && (
+                <div style={{ marginTop: 6 }}>
+                  {Object.entries(preview.counts).filter(([, n]) => n > 0).map(([k, n]) => (
+                    <span key={k} className="badge" style={{ marginRight: 6 }}>{k.replace(/_/g, ' ')}: {num(n)}</span>
+                  ))}
+                </div>
+              )}
+              {(preview.notes || []).length > 0 && (
+                <div className="mono" style={{ marginTop: 8, fontSize: 12, whiteSpace: 'pre-wrap' }}>
+                  {preview.notes.join('\n')}
+                </div>
+              )}
+              {!preview.ok && <div style={{ marginTop: 6 }}>Script exited non-zero: <span className="mono">{(preview.stderr || '').slice(-300)}</span></div>}
+            </div>
+          )}
           {preview.rows.length > 0 && (
             <>
               <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>

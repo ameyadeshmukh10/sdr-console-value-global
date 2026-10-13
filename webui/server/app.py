@@ -1699,7 +1699,7 @@ def _generated_count():
 
 
 def _parse_enroll(stdout):
-    rows, counts = [], None
+    rows, counts, notes = [], None, []
     for line in stdout.splitlines():
         m = ENROLL_LINE.match(line)
         if m:
@@ -1716,11 +1716,14 @@ def _parse_enroll(stdout):
                 counts = json.loads(cm.group(1).replace("'", '"'))
             except json.JSONDecodeError:
                 counts = None
+        if not m and line.strip():
+            # anything that isn't a routed row: suppressions, no-campaign, cap notes…
+            notes.append(line.strip()[:300])
     # per-campaign rollup of planned/attempted enrollments
     by_campaign = {}
     for r in rows:
         by_campaign[r["campaign"]] = by_campaign.get(r["campaign"], 0) + 1
-    return rows, counts, by_campaign
+    return rows, counts, by_campaign, notes[:50]
 
 
 def _enrich_enroll_rows(rows):
@@ -1743,7 +1746,7 @@ def _enrich_enroll_rows(rows):
 def do_enroll(live=False):
     args = [str(SDR_BATCHES), "enroll"] + ([] if live else ["--dry-run"])
     res = run_script(args, timeout=900)
-    rows, counts, by_campaign = _parse_enroll(res.get("stdout", ""))
+    rows, counts, by_campaign, notes = _parse_enroll(res.get("stdout", ""))
     _enrich_enroll_rows(rows)
     if live:
         INDEX.build()  # statuses changed: generated -> enrolled/skipped
@@ -1752,6 +1755,7 @@ def do_enroll(live=False):
         "live": live,
         "rows": rows,
         "counts": counts,
+        "notes": notes,
         "by_campaign": by_campaign,
         "generated_remaining": _generated_count(),
         "stdout": res["stdout"], "stderr": res["stderr"], "returncode": res["returncode"],
