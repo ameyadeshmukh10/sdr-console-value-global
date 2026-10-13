@@ -32,7 +32,7 @@ export default function EnrollPanel({ generatedReady, awaitingApproval = 0, onCh
   }, [result])
 
   async function runDryRun() {
-    setBusy(true); setError(null); setResult(null); setPreview(null)
+    setBusy(true); setError(null); setResult(null); setPreview(null); setNotice(null)
     try { setPreview(await api.enrollDryRun()) }
     catch (e) { setError(e.message) }
     finally { setBusy(false) }
