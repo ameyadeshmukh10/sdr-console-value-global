@@ -24,6 +24,7 @@ export default function EnrollPanel({ generatedReady, awaitingApproval = 0, onCh
   const [confirming, setConfirming] = useState(false)
   const [ack, setAck] = useState(false)
   const [monthly, setMonthly] = useState(null)
+  const [notice, setNotice] = useState(null)
 
   useEffect(() => {
     api.status().then((s) => setMonthly({ used: s.enrolled_this_month, cap: s.monthly_cap }))
@@ -34,6 +35,20 @@ export default function EnrollPanel({ generatedReady, awaitingApproval = 0, onCh
     setBusy(true); setError(null); setResult(null); setPreview(null)
     try { setPreview(await api.enrollDryRun()) }
     catch (e) { setError(e.message) }
+    finally { setBusy(false) }
+  }
+
+  async function requeueFailed() {
+    setBusy(true); setError(null)
+    try {
+      const r = await api.enrollRequeueFailed()
+      setResult(null)
+      setPreview(null)
+      setNotice(r.requeued > 0
+        ? `${r.requeued} failed enrollment${r.requeued === 1 ? '' : 's'} re-queued — preview and enroll again.`
+        : 'No failed enrollments to retry.')
+      onChanged?.()
+    } catch (e) { setError(e.message) }
     finally { setBusy(false) }
   }
 
@@ -72,6 +87,7 @@ export default function EnrollPanel({ generatedReady, awaitingApproval = 0, onCh
       </div>
 
       <ErrorBanner error={error} />
+      {notice && <div className="banner info" style={{ marginTop: 12 }}>{notice}</div>}
 
       {generatedReady === 0 && !result && (
         <div className="banner info" style={{ marginTop: 12 }}>
@@ -83,6 +99,10 @@ export default function EnrollPanel({ generatedReady, awaitingApproval = 0, onCh
       <div className="row" style={{ gap: 12, marginTop: 14 }}>
         <button className="ghost" onClick={runDryRun} disabled={busy || generatedReady === 0}>
           {busy && !confirming ? <Spinner label="Previewing…" /> : 'Preview enrollment (dry-run)'}
+        </button>
+        <button className="ghost" onClick={requeueFailed} disabled={busy}
+          title="Re-queue contacts whose enrollment failed at Email Bison (HTTP / attach errors) so they can be enrolled again">
+          Retry failed enrollments
         </button>
         {preview && preview.rows.length > 0 && (
           <button onClick={() => setConfirming(true)} disabled={busy}>

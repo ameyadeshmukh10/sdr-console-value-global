@@ -4587,6 +4587,23 @@ def do_approve_outreach(contact_ids=None, approve_all=False):
     return {"ok": True, "approved": approved, "review": review}, 200
 
 
+def do_requeue_failed_enrollments():
+    """Re-arm contacts whose live enroll failed at Bison (HTTP / attach errors)."""
+    bdb = _bdb()
+
+    def _run():
+        conn = bdb.connect()
+        try:
+            bdb.init_schema(conn)
+            return bdb.requeue_failed_enrollments(conn), bdb.review_counts(conn)
+        finally:
+            conn.close()
+
+    n, review = bdb.retry_locked(_run)
+    INDEX.build()
+    return {"ok": True, "requeued": n, "review": review}, 200
+
+
 # ----------------------------------------------------------------------------
 # A/B by instruction variant + "show the product" sample fulfillment.
 # ----------------------------------------------------------------------------
@@ -5060,6 +5077,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(do_refresh())
             if path == "/api/enroll/dry-run":
                 return self._json(do_enroll(live=False))
+            if path == "/api/enroll/requeue-failed":
+                payload, code = do_requeue_failed_enrollments()
+                return self._json(payload, code)
             if path == "/api/enroll/live":
                 body = self._read_body()
                 if body.get("confirm") is not True:
