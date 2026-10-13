@@ -1699,7 +1699,7 @@ def _generated_count():
 
 
 def _parse_enroll(stdout):
-    rows, counts = [], None
+    rows, counts, notes = [], None, []
     for line in stdout.splitlines():
         m = ENROLL_LINE.match(line)
         if m:
@@ -1716,11 +1716,14 @@ def _parse_enroll(stdout):
                 counts = json.loads(cm.group(1).replace("'", '"'))
             except json.JSONDecodeError:
                 counts = None
+        if not m and line.strip():
+            # anything that isn't a routed row: suppressions, no-campaign, cap notes…
+            notes.append(line.strip()[:300])
     # per-campaign rollup of planned/attempted enrollments
     by_campaign = {}
     for r in rows:
         by_campaign[r["campaign"]] = by_campaign.get(r["campaign"], 0) + 1
-    return rows, counts, by_campaign
+    return rows, counts, by_campaign, notes[:50]
 
 
 def _enrich_enroll_rows(rows):
@@ -1743,7 +1746,7 @@ def _enrich_enroll_rows(rows):
 def do_enroll(live=False):
     args = [str(SDR_BATCHES), "enroll"] + ([] if live else ["--dry-run"])
     res = run_script(args, timeout=900)
-    rows, counts, by_campaign = _parse_enroll(res.get("stdout", ""))
+    rows, counts, by_campaign, notes = _parse_enroll(res.get("stdout", ""))
     _enrich_enroll_rows(rows)
     if live:
         INDEX.build()  # statuses changed: generated -> enrolled/skipped
@@ -1752,6 +1755,7 @@ def do_enroll(live=False):
         "live": live,
         "rows": rows,
         "counts": counts,
+        "notes": notes,
         "by_campaign": by_campaign,
         "generated_remaining": _generated_count(),
         "stdout": res["stdout"], "stderr": res["stderr"], "returncode": res["returncode"],
@@ -4583,6 +4587,23 @@ def do_approve_outreach(contact_ids=None, approve_all=False):
     return {"ok": True, "approved": approved, "review": review}, 200
 
 
+def do_requeue_failed_enrollments():
+    """Re-arm contacts whose live enroll failed at Bison (HTTP / attach errors)."""
+    bdb = _bdb()
+
+    def _run():
+        conn = bdb.connect()
+        try:
+            bdb.init_schema(conn)
+            return bdb.requeue_failed_enrollments(conn), bdb.review_counts(conn)
+        finally:
+            conn.close()
+
+    n, review = bdb.retry_locked(_run)
+    INDEX.build()
+    return {"ok": True, "requeued": n, "review": review}, 200
+
+
 # ----------------------------------------------------------------------------
 # A/B by instruction variant + "show the product" sample fulfillment.
 # ----------------------------------------------------------------------------
@@ -5056,6 +5077,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(do_refresh())
             if path == "/api/enroll/dry-run":
                 return self._json(do_enroll(live=False))
+            if path == "/api/enroll/requeue-failed":
+                payload, code = do_requeue_failed_enrollments()
+                return self._json(payload, code)
             if path == "/api/enroll/live":
                 body = self._read_body()
                 if body.get("confirm") is not True:

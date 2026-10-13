@@ -392,6 +392,20 @@ def approve_outreach(conn, contact_ids=None):
     return cur.rowcount
 
 
+def requeue_failed_enrollments(conn):
+    """Put contacts whose enrollment FAILED at the delivery step (Bison rejected
+    the lead or the attach call errored — error text starts 'HTTP ' or 'attach:')
+    back to 'generated' so the next enroll retries them. Copy + approval are kept.
+    Suppression skips ('suppressed: ...') are deliberately left alone. Returns
+    the number requeued."""
+    cur = conn.execute(
+        "UPDATE contacts SET status='generated', error=NULL, updated_at=? "
+        "WHERE status='skipped' AND (error LIKE 'HTTP %' OR error LIKE 'attach:%')",
+        (now(),))
+    conn.commit()
+    return cur.rowcount
+
+
 def enroll_eligible(conn):
     """Contacts enrollment may touch: 'generated' AND past the outreach gate
     (autonomous contacts have no gate; gated ones need approved_at). Same row

@@ -24,6 +24,7 @@ export default function EnrollPanel({ generatedReady, awaitingApproval = 0, onCh
   const [confirming, setConfirming] = useState(false)
   const [ack, setAck] = useState(false)
   const [monthly, setMonthly] = useState(null)
+  const [notice, setNotice] = useState(null)
 
   useEffect(() => {
     api.status().then((s) => setMonthly({ used: s.enrolled_this_month, cap: s.monthly_cap }))
@@ -31,9 +32,23 @@ export default function EnrollPanel({ generatedReady, awaitingApproval = 0, onCh
   }, [result])
 
   async function runDryRun() {
-    setBusy(true); setError(null); setResult(null); setPreview(null)
+    setBusy(true); setError(null); setResult(null); setPreview(null); setNotice(null)
     try { setPreview(await api.enrollDryRun()) }
     catch (e) { setError(e.message) }
+    finally { setBusy(false) }
+  }
+
+  async function requeueFailed() {
+    setBusy(true); setError(null)
+    try {
+      const r = await api.enrollRequeueFailed()
+      setResult(null)
+      setPreview(null)
+      setNotice(r.requeued > 0
+        ? `${r.requeued} failed enrollment${r.requeued === 1 ? '' : 's'} re-queued — preview and enroll again.`
+        : 'No failed enrollments to retry.')
+      onChanged?.()
+    } catch (e) { setError(e.message) }
     finally { setBusy(false) }
   }
 
@@ -72,6 +87,7 @@ export default function EnrollPanel({ generatedReady, awaitingApproval = 0, onCh
       </div>
 
       <ErrorBanner error={error} />
+      {notice && <div className="banner info" style={{ marginTop: 12 }}>{notice}</div>}
 
       {generatedReady === 0 && !result && (
         <div className="banner info" style={{ marginTop: 12 }}>
@@ -83,6 +99,10 @@ export default function EnrollPanel({ generatedReady, awaitingApproval = 0, onCh
       <div className="row" style={{ gap: 12, marginTop: 14 }}>
         <button className="ghost" onClick={runDryRun} disabled={busy || generatedReady === 0}>
           {busy && !confirming ? <Spinner label="Previewing…" /> : 'Preview enrollment (dry-run)'}
+        </button>
+        <button className="ghost" onClick={requeueFailed} disabled={busy}
+          title="Re-queue contacts whose enrollment failed at Email Bison (HTTP / attach errors) so they can be enrolled again">
+          Retry failed enrollments
         </button>
         {preview && preview.rows.length > 0 && (
           <button onClick={() => setConfirming(true)} disabled={busy}>
@@ -99,8 +119,27 @@ export default function EnrollPanel({ generatedReady, awaitingApproval = 0, onCh
             {Object.entries(byCampaign).map(([c, n]) => (
               <span key={c} className="badge">campaign {c} ({CAMPAIGN_PERSONA[c] || '?'}): {n}</span>
             ))}
-            {preview.rows.length === 0 && <span className="muted">No contacts in <span className="mono">generated</span> status.</span>}
           </div>
+          {preview.rows.length === 0 && (
+            <div className="banner info" style={{ marginBottom: 12 }}>
+              {generatedReady > 0
+                ? <>None of the <b>{num(generatedReady)}</b> approved contacts can be enrolled right now. Why:</>
+                : <>No contacts in <span className="mono">generated</span> status.</>}
+              {preview.counts && (
+                <div style={{ marginTop: 6 }}>
+                  {Object.entries(preview.counts).filter(([, n]) => n > 0).map(([k, n]) => (
+                    <span key={k} className="badge" style={{ marginRight: 6 }}>{k.replace(/_/g, ' ')}: {num(n)}</span>
+                  ))}
+                </div>
+              )}
+              {(preview.notes || []).length > 0 && (
+                <div className="mono" style={{ marginTop: 8, fontSize: 12, whiteSpace: 'pre-wrap' }}>
+                  {preview.notes.join('\n')}
+                </div>
+              )}
+              {!preview.ok && <div style={{ marginTop: 6 }}>Script exited non-zero: <span className="mono">{(preview.stderr || '').slice(-300)}</span></div>}
+            </div>
+          )}
           {preview.rows.length > 0 && (
             <>
               <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>

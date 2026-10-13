@@ -103,6 +103,7 @@ export const api = {
   reindex: () => post('/api/reindex'),
   progress: () => get('/api/progress'),
   enrollDryRun: () => post('/api/enroll/dry-run'),
+  enrollRequeueFailed: () => post('/api/enroll/requeue-failed'),
   enrollLive: () => post('/api/enroll/live', { confirm: true }),
   trends: () => get('/api/trends'),
   refreshTrends: () => post('/api/trends/refresh'),
