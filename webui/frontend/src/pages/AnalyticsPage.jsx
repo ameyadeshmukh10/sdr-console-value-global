@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts'
@@ -21,16 +21,33 @@ export default function AnalyticsPage() {
   const [aisdr, setAisdr] = useState(null)  // AI SDR deal attribution (MongoDB)
   const [syncMsg, setSyncMsg] = useState(null)
   const [syncBusy, setSyncBusy] = useState(false)
+  // Auto-refresh fires at most once per page open, per data source.
+  const autoChecked = useRef({ stats: false, aisdr: false })
 
   function load() {
-    api.analytics().then((d) => { setData(d); setError(null) }).catch((e) => setError(e.message))
+    return api.analytics().then((d) => { setData(d); setError(null); return d }).catch((e) => { setError(e.message); return null })
   }
   function loadAisdr() {
-    api.aisdrAnalytics().then(setAisdr).catch(() => setAisdr({ configured: true, error: 'unreachable' }))
+    return api.aisdrAnalytics().then((d) => { setAisdr(d); return d })
+      .catch(() => { setAisdr({ configured: true, error: 'unreachable' }); return null })
   }
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load().then((d) => {
+      if (autoChecked.current.stats) return
+      autoChecked.current.stats = true
+      if (d && _isStale(d.fetched_at)) refresh()
+    })
+  }, [])
   useEffect(() => { api.linkedinAnalytics().then(setLi).catch(() => setLi({ error: 'unreachable' })) }, [])
-  useEffect(() => { loadAisdr() }, [])
+  useEffect(() => {
+    loadAisdr().then((d) => {
+      if (autoChecked.current.aisdr) return
+      autoChecked.current.aisdr = true
+      // last_sync_at is stamped by every run, failed ones included — so a broken
+      // config retries at most hourly instead of on every page open.
+      if (d && d.configured !== false && !d.error && _isStale(d.last_sync_at)) syncAisdr()
+    })
+  }, [])
 
   // Kick the HubSpot -> MongoDB attribution sync, then poll until it finishes
   // (the seed run takes a couple of minutes) and refresh the tiles.
@@ -234,4 +251,11 @@ export default function AnalyticsPage() {
       )}
     </div>
   )
+}
+
+// Opening the page auto-refreshes anything never synced or synced >= this long ago.
+const AUTO_REFRESH_MS = 60 * 60 * 1000
+const _isStale = (iso) => {
+  const t = iso ? new Date(iso).getTime() : NaN
+  return Number.isNaN(t) || Date.now() - t >= AUTO_REFRESH_MS
 }
