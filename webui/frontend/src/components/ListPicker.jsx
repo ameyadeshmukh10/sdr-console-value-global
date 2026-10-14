@@ -36,7 +36,7 @@ export default function ListPicker({ onSelect, selectedId }) {
         const r = await api.hubspotLists(q, type)
         setUnconfigured(r.configured === false)
         if (r.ok === false && r.configured !== false) setError(r.error || 'search failed')
-          setResults(r.lists || [])
+        setResults(r.lists || [])
       } catch (e) { setError(e.message) }
       finally { setBusy(false) }
     }, 300)
