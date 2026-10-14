@@ -24,6 +24,7 @@ export default function ListPicker({ onSelect, selectedId }) {
   const [results, setResults] = useState(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
+  const [unconfigured, setUnconfigured] = useState(false)   // no HubSpot token on the server
   const [open, setOpen] = useState(false)   // collapsed by default — open on search or click
   const debounce = useRef(null)
 
@@ -33,7 +34,8 @@ export default function ListPicker({ onSelect, selectedId }) {
       setBusy(true); setError(null)
       try {
         const r = await api.hubspotLists(q, type)
-        if (r.ok === false) setError(r.error || 'search failed')
+        setUnconfigured(r.configured === false)
+        if (r.ok === false && r.configured !== false) setError(r.error || 'search failed')
         setResults(r.lists || [])
       } catch (e) { setError(e.message) }
       finally { setBusy(false) }
@@ -54,8 +56,9 @@ export default function ListPicker({ onSelect, selectedId }) {
         </button>
       </div>
       {busy && open && <div style={{ marginTop: 8 }}><Spinner label="Searching…" /></div>}
+      {unconfigured && <div className="banner info" style={{ marginTop: 8 }}>HubSpot not configured.</div>}
       {error && <div className="banner error" style={{ marginTop: 8 }}>{error}</div>}
-      {open && results && !busy && (
+      {open && results && !busy && !unconfigured && (
         <div className="panel" style={{ padding: 0, marginTop: 10, maxHeight: 240, overflow: 'auto' }}>
           {results.length === 0 ? (
             <div className="empty" style={{ padding: 16 }}>No {type} lists match{q ? ` “${q}”` : ''}.</div>
