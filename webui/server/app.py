@@ -925,6 +925,8 @@ def do_ingest(list_id, source="manual", by=None):
 
 def do_hubspot_lists(query, list_type=None):
     """Search HubSpot lists by name. list_type in {contact, company} or None (both)."""
+    if not read_env().get("HUBSPOT_ACCESS_TOKEN"):
+        return {"ok": False, "configured": False, "lists": []}
     args = [str(HUBSPOT_LISTS), "search", query or ""]
     if list_type in ("contact", "company"):
         args += ["--type", list_type]
