@@ -38,3 +38,6 @@ deck-renderer/.deck.lock
 # Signal plays are runtime artifacts (built per lead, live on the volume)
 data/signal-plays/
 data/outreach/instructions/
+
+# Local Python venv (make init)
+.venv/
