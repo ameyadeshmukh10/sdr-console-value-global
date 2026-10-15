@@ -162,6 +162,7 @@ export default function AnalyticsPage() {
           <Stat label="Total leads" value={num(t.total_leads)} />
           <Stat label="Contacted" value={num(t.total_contacted)} />
           <Stat label="Replies" value={num(t.total_replies)} sub={`${pct(t.overall_reply_rate_pct)} reply rate`} />
+          <Stat label="Bounces" value={num(t.total_bounced)} sub={`${pct(t.overall_bounce_rate_pct)} bounce rate`} />
           <Stat label="Interested" value={num(t.total_interested)} sub={`${pct(t.overall_interested_rate_pct)} interested rate`} accent />
         </div>
       )}
@@ -251,6 +252,8 @@ function CampaignsTable({ campaigns }) {
           <SortTh label="Contacted" k="total_leads_contacted" sort={sort} onSort={onSort} />
           <SortTh label="Replies" k="unique_replies" sort={sort} onSort={onSort} />
           <SortTh label="Reply %" k="reply_rate_pct" sort={sort} onSort={onSort} />
+          <SortTh label="Bounces" k="bounced" sort={sort} onSort={onSort} />
+          <SortTh label="Bounce %" k="bounce_rate_pct" sort={sort} onSort={onSort} />
           <SortTh label="Interested" k="interested" sort={sort} onSort={onSort} />
           <SortTh label="Interested %" k="interested_rate_pct" sort={sort} onSort={onSort} />
         </tr>
@@ -264,6 +267,8 @@ function CampaignsTable({ campaigns }) {
             <td>{num(c.total_leads_contacted)}</td>
             <td>{num(c.unique_replies)}</td>
             <td>{pct(c.reply_rate_pct)}</td>
+            <td>{num(c.bounced)}</td>
+            <td>{pct(c.bounce_rate_pct)}</td>
             <td>{num(c.interested)}</td>
             <td>{pct(c.interested_rate_pct)}</td>
           </tr>
