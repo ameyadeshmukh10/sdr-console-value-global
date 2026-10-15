@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import { Spinner, ErrorBanner, num } from './ui.jsx'
+import { SortTh, useSort } from './sortable.jsx'
 
 // CSV Upload — the third way to feed the AI SDR (next to a CRM list and SLAs):
 // upload a CSV of contacts (first/last name, job title, email, LinkedIn URL,
@@ -63,15 +64,30 @@ function AudienceContacts({ audienceId }) {
       .catch((e) => { if (live) setError(e.message) })
     return () => { live = false }
   }, [audienceId])
+  const rows = detail?.contacts || []
+  const { rows: sorted, sort, onSort } = useSort(rows, {
+    name: (c) => [c.first_name, c.last_name].filter(Boolean).join(' '),
+    company: (c) => c.company || c.domain,
+    linkedin: (c) => (c.linkedin_url ? 'profile' : null),
+    status: (c) => c.status || 'pending',
+  })
   if (error) return <div className="banner error" style={{ margin: 8 }}>{error}</div>
   if (!detail) return <div style={{ padding: 10 }}><Spinner label="Loading contacts…" /></div>
-  const rows = detail.contacts || []
   return (
     <div style={{ maxHeight: 320, overflow: 'auto' }}>
       <table className="dense">
-        <thead><tr><th>Name</th><th>Title</th><th>Company</th><th>Email</th><th>LinkedIn</th><th>Persona</th><th>Batch</th><th>Status</th></tr></thead>
+        <thead><tr>
+          <SortTh label="Name" k="name" sort={sort} onSort={onSort} />
+          <SortTh label="Title" k="title" sort={sort} onSort={onSort} />
+          <SortTh label="Company" k="company" sort={sort} onSort={onSort} />
+          <SortTh label="Email" k="email" sort={sort} onSort={onSort} />
+          <SortTh label="LinkedIn" k="linkedin" sort={sort} onSort={onSort} />
+          <SortTh label="Persona" k="persona" sort={sort} onSort={onSort} />
+          <SortTh label="Batch" k="batch_id" sort={sort} onSort={onSort} />
+          <SortTh label="Status" k="status" sort={sort} onSort={onSort} />
+        </tr></thead>
         <tbody>
-          {rows.map((c) => (
+          {sorted.map((c) => (
             <tr key={c.contact_id}>
               <td>{[c.first_name, c.last_name].filter(Boolean).join(' ') || '—'}</td>
               <td className="muted">{c.title || '—'}</td>
@@ -183,6 +199,10 @@ export default function CsvAudiencePanel() {
   }
 
   const added = result?.audience?.added ?? 0
+  const { rows: sortedAudiences, sort, onSort } = useSort(audiences, {
+    contacts: (a) => a.contacts ?? a.added,
+    status: (a) => STATUS_ORDER.filter((s) => a.status_counts?.[s]).map((s) => `${a.status_counts[s]} ${s}`).join(' '),
+  })
   return (
     <div className="panel" style={{ marginBottom: 22 }}>
       <div className="section-h" style={{ marginTop: 0 }}>CSV Upload</div>
@@ -217,9 +237,16 @@ export default function CsvAudiencePanel() {
       {audiences && audiences.length > 0 && (
         <div className="panel" style={{ padding: 0, marginTop: 14, overflow: 'auto' }}>
           <table className="dense">
-            <thead><tr><th>Audience</th><th>Uploaded</th><th>By</th><th>Contacts</th><th>Status</th><th></th></tr></thead>
+            <thead><tr>
+              <SortTh label="Audience" k="name" sort={sort} onSort={onSort} />
+              <SortTh label="Uploaded" k="uploaded_at" sort={sort} onSort={onSort} />
+              <SortTh label="By" k="by" sort={sort} onSort={onSort} />
+              <SortTh label="Contacts" k="contacts" sort={sort} onSort={onSort} />
+              <SortTh label="Status" k="status" sort={sort} onSort={onSort} />
+              <th></th>
+            </tr></thead>
             <tbody>
-              {audiences.map((a) => (
+              {sortedAudiences.map((a) => (
                 <AudienceRow key={a.id} aud={a}
                   onRenamed={(id, newName) => setAudiences((cur) => cur.map((x) => (x.id === id ? { ...x, name: newName } : x)))} />
               ))}

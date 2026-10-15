@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { Spinner, ErrorBanner, num } from './ui.jsx'
+import { SortTh, useSort } from './sortable.jsx'
 
 // SLAs — the second way to feed the AI SDR (next to picking a list by hand): rules
 // that check HubSpot on a schedule and enroll whoever matches. Each SLA maintains
@@ -340,6 +341,14 @@ function filterText(f) {
 // crammed into the row itself.
 function SlaDetail({ s, busy, onRun, onEdit, onToggle, onDelete }) {
   const lr = s.last_run
+  const { rows: runs, sort, onSort } = useSort((s.runs || []).slice(0, 10), {
+    when: (r) => r.at,
+    mode: (r) => `${r.mode || ''}${r.dry_run ? ' (dry)' : ''}`,
+    matched: (r) => r.matched || 0,
+    new: (r) => r.new || 0,
+    added: (r) => r.added || 0,
+    pull: (r) => (r.pull ? (r.pull.ok ? r.pull.new_contacts || 0 : `failed (${r.pull.stage})`) : null),
+  })
   return (
     <div className="panel" style={{ margin: '4px 0 10px', padding: 16, background: 'var(--panel-2)' }}>
       <div className="row between" style={{ gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>
@@ -389,9 +398,17 @@ function SlaDetail({ s, busy, onRun, onEdit, onToggle, onDelete }) {
       {(s.runs || []).length > 0 && (
         <div style={{ marginTop: 12, overflowX: 'auto' }}>
           <table className="dense" style={{ margin: 0 }}>
-            <thead><tr><th>When</th><th>Mode</th><th>Matched</th><th>New</th><th>Added</th><th>Pull</th><th>Error</th></tr></thead>
+            <thead><tr>
+              <SortTh label="When" k="when" sort={sort} onSort={onSort} />
+              <SortTh label="Mode" k="mode" sort={sort} onSort={onSort} />
+              <SortTh label="Matched" k="matched" sort={sort} onSort={onSort} />
+              <SortTh label="New" k="new" sort={sort} onSort={onSort} />
+              <SortTh label="Added" k="added" sort={sort} onSort={onSort} />
+              <SortTh label="Pull" k="pull" sort={sort} onSort={onSort} />
+              <SortTh label="Error" k="error" sort={sort} onSort={onSort} />
+            </tr></thead>
             <tbody>
-              {(s.runs || []).slice(0, 10).map((r, i) => (
+              {runs.map((r, i) => (
                 <tr key={i}>
                   <td style={{ whiteSpace: 'nowrap' }}>{fmtWhen(r.at)}</td><td>{r.mode}{r.dry_run ? ' (dry)' : ''}</td>
                   <td>{num(r.matched || 0)}{r.form_submissions ? <span className="muted"> · {num(r.form_submissions)} subs</span> : null}</td>
@@ -433,6 +450,7 @@ export default function SlaPanel({ onChanged }) {
     finally { setBusy(null) }
   }
   const slas = data?.slas || []
+  const { rows: sortedSlas, sort, onSort } = useSort(slas)
 
   return (
     <div className="panel" style={{ marginBottom: 22 }}>
@@ -447,9 +465,13 @@ export default function SlaPanel({ onChanged }) {
       {slas.length > 0 && (
         <div className="panel" style={{ padding: 0, marginTop: 12 }}>
           <table className="dense">
-            <thead><tr><th>SLA</th><th>Schedule</th><th style={{ width: 150 }}></th></tr></thead>
+            <thead><tr>
+              <SortTh label="SLA" k="name" sort={sort} onSort={onSort} />
+              <SortTh label="Schedule" k="schedule_label" sort={sort} onSort={onSort} />
+              <th style={{ width: 150 }}></th>
+            </tr></thead>
             <tbody>
-              {slas.map((s) => {
+              {sortedSlas.map((s) => {
                 const isOpen = openId === s.id
                 return [
                   <tr key={s.id} onClick={() => setOpenId(isOpen ? null : s.id)}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { Spinner, ErrorBanner, num } from './ui.jsx'
+import { SortTh, useSort } from './sortable.jsx'
 
 const STATUS_COLOR = {
   processing: 'var(--accent)', done: 'var(--green)', cancelled: 'var(--amber)', error: 'var(--red)',
@@ -56,6 +57,11 @@ export default function BatchJobPanel({ pendingBatches, variant, split, splitVal
 
   const enrolledCount = (jobs || []).filter((j) => j.enrolled_live).length
   const visible = (jobs || []).filter((j) => showEnrolled || !j.enrolled_live)
+  const { rows: sorted, sort, onSort } = useSort(visible, {
+    done: (j) => j.counts?.succeeded || 0,
+    errored: (j) => (j.counts?.errored || 0) + (j.counts?.expired || 0),
+    result: (j) => (j.status === 'done' ? `${j.summary?.linted || 0} linted · ${j.summary?.failed || 0} failed${j.enrolled_live ? ' · enrolled' : ''}` : null),
+  })
 
   return (
     <div className="panel" style={{ marginTop: 20 }}>
@@ -92,9 +98,17 @@ export default function BatchJobPanel({ pendingBatches, variant, split, splitVal
       {visible.length > 0 && (
         <div className="panel" style={{ padding: 0, marginTop: 16, maxHeight: 320, overflow: 'auto' }}>
           <table>
-            <thead><tr><th>Job</th><th>Status</th><th>Requests</th><th>Done</th><th>Errored</th><th>Result</th><th></th></tr></thead>
+            <thead><tr>
+              <SortTh label="Job" k="job_id" sort={sort} onSort={onSort} />
+              <SortTh label="Status" k="status" sort={sort} onSort={onSort} />
+              <SortTh label="Requests" k="request_count" sort={sort} onSort={onSort} />
+              <SortTh label="Done" k="done" sort={sort} onSort={onSort} />
+              <SortTh label="Errored" k="errored" sort={sort} onSort={onSort} />
+              <SortTh label="Result" k="result" sort={sort} onSort={onSort} />
+              <th></th>
+            </tr></thead>
             <tbody>
-              {visible.map((j) => {
+              {sorted.map((j) => {
                 const c = j.counts || {}
                 return (
                   <tr key={j.job_id}>

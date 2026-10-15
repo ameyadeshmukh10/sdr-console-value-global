@@ -4,6 +4,7 @@ import {
 } from 'recharts'
 import { api } from '../api.js'
 import { Stat, Spinner, ErrorBanner, num, pct } from '../components/ui.jsx'
+import { SortTh, useSort } from '../components/sortable.jsx'
 import { BRAND, SERIES, TOOLTIP_STYLE } from '../theme.js'
 
 // Pillar 5 — Trends: what's working across the interested replies. Reads the
@@ -59,6 +60,8 @@ export default function TrendsPage() {
   const conv = data?.conversion
   const cohorts = data?.cohorts
   const when = data?.fetched_at ? new Date(data.fetched_at).toLocaleString() : '—'
+  const varSort = useSort(variants?.variants)
+  const convSort = useSort(conv?.by_campaign)
 
   const convChart = (conv?.by_campaign || []).map((c) => ({
     name: c.campaign_name?.slice(0, 16),
@@ -86,9 +89,15 @@ export default function TrendsPage() {
         <div className="panel" style={{ marginBottom: 22 }}>
           <div className="section-h" style={{ marginTop: 0 }}>By instruction variant (A/B)</div>
           <table>
-            <thead><tr><th>Variant</th><th>Contacts</th><th>Enrolled</th><th>Interested</th><th>Interested rate</th></tr></thead>
+            <thead><tr>
+              <SortTh label="Variant" k="variant" sort={varSort.sort} onSort={varSort.onSort} />
+              <SortTh label="Contacts" k="total" sort={varSort.sort} onSort={varSort.onSort} />
+              <SortTh label="Enrolled" k="enrolled" sort={varSort.sort} onSort={varSort.onSort} />
+              <SortTh label="Interested" k="interested" sort={varSort.sort} onSort={varSort.onSort} />
+              <SortTh label="Interested rate" k="interested_rate_pct" sort={varSort.sort} onSort={varSort.onSort} />
+            </tr></thead>
             <tbody>
-              {variants.variants.map((v) => (
+              {varSort.rows.map((v) => (
                 <tr key={v.variant}>
                   <td><span className="badge cta">{v.variant}</span></td>
                   <td>{num(v.total)}</td>
@@ -150,9 +159,17 @@ export default function TrendsPage() {
               <h2 className="section-h">Conversion by campaign</h2>
               <div className="panel" style={{ padding: 0, marginBottom: 22 }}>
                 <table>
-                  <thead><tr><th>Campaign</th><th>Offer</th><th>Geo</th><th>Contacted</th><th>Interested</th><th>Interested %</th><th>Reply %</th></tr></thead>
+                  <thead><tr>
+                    <SortTh label="Campaign" k="campaign_name" sort={convSort.sort} onSort={convSort.onSort} />
+                    <SortTh label="Offer" k="offer_type" sort={convSort.sort} onSort={convSort.onSort} />
+                    <SortTh label="Geo" k="geo" sort={convSort.sort} onSort={convSort.onSort} />
+                    <SortTh label="Contacted" k="contacted" sort={convSort.sort} onSort={convSort.onSort} />
+                    <SortTh label="Interested" k="interested" sort={convSort.sort} onSort={convSort.onSort} />
+                    <SortTh label="Interested %" k="interested_rate_pct" sort={convSort.sort} onSort={convSort.onSort} />
+                    <SortTh label="Reply %" k="reply_rate_pct" sort={convSort.sort} onSort={convSort.onSort} />
+                  </tr></thead>
                   <tbody>
-                    {conv.by_campaign.map((c, i) => (
+                    {convSort.rows.map((c, i) => (
                       <tr key={i}>
                         <td>{c.campaign_name}</td>
                         <td><span className="badge">{c.offer_type}</span></td>

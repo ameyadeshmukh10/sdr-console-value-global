@@ -4,6 +4,7 @@ import {
 } from 'recharts'
 import { api } from '../api.js'
 import { Stat, Spinner, ErrorBanner, num, pct, EmailIcon, LinkedInIcon } from '../components/ui.jsx'
+import { SortTh, useSort } from '../components/sortable.jsx'
 import { BRAND, TOOLTIP_STYLE } from '../theme.js'
 import { isStale } from '../autoRefresh.js'
 
@@ -222,25 +223,7 @@ export default function AnalyticsPage() {
 
           <h2 className="section-h" style={chartData.length > 0 ? undefined : { marginTop: 30 }}>Email campaigns</h2>
           <div className="panel" style={{ padding: 0 }}>
-            <table>
-              <thead>
-                <tr><th>Campaign</th><th>Status</th><th>Leads</th><th>Contacted</th><th>Replies</th><th>Reply %</th><th>Interested</th><th>Interested %</th></tr>
-              </thead>
-              <tbody>
-                {data.campaigns.map((c) => (
-                  <tr key={c.campaign_id}>
-                    <td>{c.campaign_name || `#${c.campaign_id}`}</td>
-                    <td><span className="badge">{c.status}</span></td>
-                    <td>{num(c.total_leads)}</td>
-                    <td>{num(c.total_leads_contacted)}</td>
-                    <td>{num(c.unique_replies)}</td>
-                    <td>{pct(c.reply_rate_pct)}</td>
-                    <td>{num(c.interested)}</td>
-                    <td>{pct(c.interested_rate_pct)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <CampaignsTable campaigns={data.campaigns} />
           </div>
 
           {data.errors?.length > 0 && (
@@ -251,5 +234,41 @@ export default function AnalyticsPage() {
         </>
       )}
     </div>
+  )
+}
+
+function CampaignsTable({ campaigns }) {
+  const { rows, sort, onSort } = useSort(campaigns, {
+    campaign_name: (c) => c.campaign_name || `#${c.campaign_id}`,
+  })
+  return (
+    <table>
+      <thead>
+        <tr>
+          <SortTh label="Campaign" k="campaign_name" sort={sort} onSort={onSort} />
+          <SortTh label="Status" k="status" sort={sort} onSort={onSort} />
+          <SortTh label="Leads" k="total_leads" sort={sort} onSort={onSort} />
+          <SortTh label="Contacted" k="total_leads_contacted" sort={sort} onSort={onSort} />
+          <SortTh label="Replies" k="unique_replies" sort={sort} onSort={onSort} />
+          <SortTh label="Reply %" k="reply_rate_pct" sort={sort} onSort={onSort} />
+          <SortTh label="Interested" k="interested" sort={sort} onSort={onSort} />
+          <SortTh label="Interested %" k="interested_rate_pct" sort={sort} onSort={onSort} />
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((c) => (
+          <tr key={c.campaign_id}>
+            <td>{c.campaign_name || `#${c.campaign_id}`}</td>
+            <td><span className="badge">{c.status}</span></td>
+            <td>{num(c.total_leads)}</td>
+            <td>{num(c.total_leads_contacted)}</td>
+            <td>{num(c.unique_replies)}</td>
+            <td>{pct(c.reply_rate_pct)}</td>
+            <td>{num(c.interested)}</td>
+            <td>{pct(c.interested_rate_pct)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   )
 }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { Spinner, ErrorBanner, num } from './ui.jsx'
+import { SortTh, useSort } from './sortable.jsx'
 
 // The client's do-not-contact account list. Hard matches are blocked at CSV
 // ingest, the segment gate, and enrollment; soft (fuzzy) matches are flagged
@@ -49,6 +50,7 @@ export default function SuppressionPanel() {
   }
 
   const rules = data?.rules || []
+  const { rows: sortedRules, sort, onSort } = useSort(rules)
   return (
     <div className="panel" style={{ marginBottom: 22 }}>
       <div className="row between">
@@ -80,9 +82,14 @@ export default function SuppressionPanel() {
           {rules.length > 0 && (
             <div className="panel" style={{ padding: 0, marginBottom: 12, maxHeight: 260, overflow: 'auto' }}>
               <table className="dense">
-                <thead><tr><th>Account</th><th>Domain</th><th>Reason</th><th></th></tr></thead>
+                <thead><tr>
+                  <SortTh label="Account" k="name" sort={sort} onSort={onSort} />
+                  <SortTh label="Domain" k="domain" sort={sort} onSort={onSort} />
+                  <SortTh label="Reason" k="reason" sort={sort} onSort={onSort} />
+                  <th></th>
+                </tr></thead>
                 <tbody>
-                  {rules.map((r) => (
+                  {sortedRules.map((r) => (
                     <tr key={r.id}>
                       <td><b>{r.name}</b></td>
                       <td className="mono muted">{r.domain || '—'}</td>

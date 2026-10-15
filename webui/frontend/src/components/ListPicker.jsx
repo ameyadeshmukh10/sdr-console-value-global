@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { Spinner } from './ui.jsx'
+import { SortTh, useSort } from './sortable.jsx'
 
 // Searchable HubSpot list picker for the Use view: one dropdown (contact / company
 // lists) inline with the search box; the result table is collapsed by default and
@@ -44,6 +45,7 @@ export default function ListPicker({ onSelect, selectedId }) {
   }, [q, type])
 
   const count = results ? results.length : null
+  const { rows: sorted, sort, onSort } = useSort(results)
   return (
     <div>
       <div className="row" style={{ gap: 8, alignItems: 'center' }}>
@@ -64,9 +66,16 @@ export default function ListPicker({ onSelect, selectedId }) {
             <div className="empty" style={{ padding: 16 }}>No {type} lists match{q ? ` “${q}”` : ''}.</div>
           ) : (
             <table className="dense">
-              <thead><tr><th>List</th><th>Created</th><th>Size</th><th>Pulled</th><th>ID</th><th></th></tr></thead>
+              <thead><tr>
+                <SortTh label="List" k="name" sort={sort} onSort={onSort} />
+                <SortTh label="Created" k="created_at" sort={sort} onSort={onSort} />
+                <SortTh label="Size" k="size" sort={sort} onSort={onSort} />
+                <SortTh label="Pulled" k="pulled_at" sort={sort} onSort={onSort} />
+                <SortTh label="ID" k="list_id" sort={sort} onSort={onSort} />
+                <th></th>
+              </tr></thead>
               <tbody>
-                {results.map((l) => {
+                {sorted.map((l) => {
                   const active = String(selectedId) === String(l.list_id)
                   const pulled = !!l.pulled_at
                   return (

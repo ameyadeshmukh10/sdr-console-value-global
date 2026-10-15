@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Badge } from './ui.jsx'
+import { SortTh, useSort } from './sortable.jsx'
 import { BRAND, PERSONA_COLORS } from '../theme.js'
 
 // "Under the hood" cards for the Orchestration view. Every section renders the
@@ -95,31 +96,47 @@ export function PipelineSection({ data }) {
   )
 }
 
+function IcpRolesTable({ roles }) {
+  const { rows, sort, onSort } = useSort(roles, {
+    persona: (r) => r.persona || 'skipped',
+    titles: (r) => (r.patterns.humanized || []).join(', '),
+  })
+  return (
+    <table className="dense">
+      <thead><tr>
+        <th></th>
+        <SortTh label="Role match" k="role" sort={sort} onSort={onSort} />
+        <SortTh label="ICP" k="icp" sort={sort} onSort={onSort} />
+        <SortTh label="Persona" k="persona" sort={sort} onSort={onSort} />
+        <SortTh label="Titles matched" k="titles" sort={sort} onSort={onSort} />
+      </tr></thead>
+      <tbody>
+        {rows.map((r) => (
+          <tr key={r.order}>
+            <td className="muted">{r.order}</td>
+            <td>
+              <b>{r.role}</b>
+              {r.note && <div className="muted" style={{ fontSize: 11 }}>{r.note}</div>}
+            </td>
+            <td>{r.icp
+              ? <span style={{ color: BRAND.jade }}>✓ ICP</span>
+              : <span style={{ color: BRAND.red }}>✗ not ICP</span>}
+            </td>
+            <td>{r.persona ? <Badge kind="persona" value={r.persona} /> : <span className="muted">skipped</span>}</td>
+            <td>{(r.patterns.humanized || []).map((h) => <Chip key={h} label={h} />)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
 export function IcpFilterSection({ data }) {
   if (!data) return <Unavailable what="The ICP filter rules (buyer_group.py)" />
   return (
     <>
       <p className="muted" style={{ fontSize: 13 }}>{data.definition}</p>
-      <table className="dense">
-        <thead><tr><th></th><th>Role match</th><th>ICP</th><th>Persona</th><th>Titles matched</th></tr></thead>
-        <tbody>
-          {data.roles.map((r) => (
-            <tr key={r.order}>
-              <td className="muted">{r.order}</td>
-              <td>
-                <b>{r.role}</b>
-                {r.note && <div className="muted" style={{ fontSize: 11 }}>{r.note}</div>}
-              </td>
-              <td>{r.icp
-                ? <span style={{ color: BRAND.jade }}>✓ ICP</span>
-                : <span style={{ color: BRAND.red }}>✗ not ICP</span>}
-              </td>
-              <td>{r.persona ? <Badge kind="persona" value={r.persona} /> : <span className="muted">skipped</span>}</td>
-              <td>{(r.patterns.humanized || []).map((h) => <Chip key={h} label={h} />)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <IcpRolesTable roles={data.roles} />
       <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
         Matched top to bottom, first match wins. {data.fallthrough}.
       </p>
@@ -148,20 +165,31 @@ export function PersonaAgentsSection({ data }) {
   )
 }
 
+function FourTouchTable({ steps }) {
+  const { rows, sort, onSort } = useSort(steps)
+  return (
+    <table className="dense">
+      <thead><tr>
+        <SortTh label="Step" k="step" sort={sort} onSort={onSort} />
+        <SortTh label="Job" k="job" sort={sort} onSort={onSort} />
+        <SortTh label="CTA" k="cta" sort={sort} onSort={onSort} />
+      </tr></thead>
+      <tbody>
+        {rows.map((r) => (
+          <tr key={r.step}><td>{r.step}</td><td style={{ fontSize: 12 }}>{r.job}</td><td style={{ fontSize: 12 }}>{r.cta}</td></tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
 export function SequencingSection({ data }) {
   if (!data) return <Unavailable what="The sequencing structure (icp-email.md / cta-offers.md)" />
   const lib = data.cta_library || {}
   return (
     <>
       <div className="section-h" style={{ marginTop: 0 }}>The 4-touch email structure</div>
-      <table className="dense">
-        <thead><tr><th>Step</th><th>Job</th><th>CTA</th></tr></thead>
-        <tbody>
-          {(data.four_touch || []).map((r) => (
-            <tr key={r.step}><td>{r.step}</td><td style={{ fontSize: 12 }}>{r.job}</td><td style={{ fontSize: 12 }}>{r.cta}</td></tr>
-          ))}
-        </tbody>
-      </table>
+      <FourTouchTable steps={data.four_touch || []} />
 
       <div className="section-h">Plus 3 LinkedIn touches</div>
       {(data.linkedin_touches || []).map((t) => (

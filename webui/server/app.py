@@ -625,14 +625,23 @@ class OutreachIndex:
 
         # Explicit column sort (before pagination — the list is server-paged).
         # "segment" sorts by the display label; blanks always sink to the end.
+        def approval_state(r):
+            # Mirrors the Approval column: auto (no gate) / approved / awaiting / — (blank).
+            if not r.get("gated"):
+                return "auto"
+            if r.get("approved"):
+                return "approved"
+            return "awaiting" if r.get("status") == "generated" else ""
+
         sort_fields = {"name": "last_name", "company": "company", "persona": "persona",
                        "cta_type": "cta_type", "status": "status",
                        "segment": "segment_label", "signal": "signal"}
         sf = sort_fields.get(sort)
-        if sf:
-            filtered = sorted(filtered, key=lambda r: (r.get(sf) or "").lower(),
+        sort_val = (lambda r: r.get(sf) or "") if sf else (approval_state if sort == "approval" else None)
+        if sort_val:
+            filtered = sorted(filtered, key=lambda r: sort_val(r).lower(),
                               reverse=(sdir == "desc"))
-            filtered.sort(key=lambda r: (r.get(sf) or "") == "")  # stable: blanks last
+            filtered.sort(key=lambda r: sort_val(r) == "")  # stable: blanks last
 
         groups = None
         group_field = {"persona": "persona", "cta_type": "cta_type", "status": "status",

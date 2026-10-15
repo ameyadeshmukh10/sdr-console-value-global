@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { Spinner, ErrorBanner, num } from './ui.jsx'
+import { SortTh, useSort } from './sortable.jsx'
 
 const STATE_COLOR = {
   queued: 'var(--muted)', researching: 'var(--accent)', linted: 'var(--green)',
@@ -35,12 +36,18 @@ export default function GenerateJobPanel({ jobId, onDone }) {
     return () => clearInterval(timer.current)
   }, [jobId])
 
+  const contacts = Object.values(job?.contacts || {})
+  const order = { researching: 0, queued: 1, linted: 2, failed: 3, error: 3, cancelled: 4 }
+  contacts.sort((a, b) => (order[a.state] ?? 9) - (order[b.state] ?? 9))
+  const { rows: sorted, sort, onSort } = useSort(contacts, {
+    contact: (c) => c.name || c.contact_id,
+    state: (c) => STATE_LABEL[c.state] || c.state,
+    issues: (c) => (c.issues && c.issues.length ? c.issues.join('; ') : null),
+  })
+
   if (error) return <ErrorBanner error={error} />
   if (!job) return <Spinner label="Starting job…" />
 
-  const contacts = Object.values(job.contacts || {})
-  const order = { researching: 0, queued: 1, linted: 2, failed: 3, error: 3, cancelled: 4 }
-  contacts.sort((a, b) => (order[a.state] ?? 9) - (order[b.state] ?? 9))
   const running = job.status === 'running'
 
   return (
@@ -64,9 +71,15 @@ export default function GenerateJobPanel({ jobId, onDone }) {
 
       <div className="panel" style={{ padding: 0, maxHeight: 300, overflow: 'auto', marginBottom: 12 }}>
         <table>
-          <thead><tr><th>Contact</th><th>Company</th><th>State</th><th>Searches</th><th>Issues</th></tr></thead>
+          <thead><tr>
+            <SortTh label="Contact" k="contact" sort={sort} onSort={onSort} />
+            <SortTh label="Company" k="company" sort={sort} onSort={onSort} />
+            <SortTh label="State" k="state" sort={sort} onSort={onSort} />
+            <SortTh label="Searches" k="web_searches" sort={sort} onSort={onSort} />
+            <SortTh label="Issues" k="issues" sort={sort} onSort={onSort} />
+          </tr></thead>
           <tbody>
-            {contacts.map((c) => (
+            {sorted.map((c) => (
               <tr key={c.contact_id}>
                 <td>{c.name || c.contact_id}</td>
                 <td className="muted">{c.company || '—'}</td>

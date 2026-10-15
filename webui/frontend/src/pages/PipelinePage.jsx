@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { Stat, Spinner, ErrorBanner, Badge, num } from '../components/ui.jsx'
+import { SortTh, useSort } from '../components/sortable.jsx'
 import EnrollPanel from '../components/EnrollPanel.jsx'
 import GenerateJobPanel from '../components/GenerateJobPanel.jsx'
 import BatchJobPanel from '../components/BatchJobPanel.jsx'
@@ -66,6 +67,12 @@ export default function PipelinePage() {
   const pctDone = total ? Math.round((100 * done) / total) : 0
   const cstat = prog?.contacts_by_status || {}
   const review = prog?.review || {}
+  const { rows: activeBatches, sort, onSort } = useSort(prog?.active_batches, {
+    status: (b) => (b.status === 'in_progress' ? 'generated' : 'pending'),
+    generated: (b) => b.counts.generated || 0,
+    failed: (b) => b.counts.failed || 0,
+    pending: (b) => b.counts.pending || 0,
+  })
 
   return (
     <div>
@@ -171,9 +178,17 @@ export default function PipelinePage() {
               <h2 className="section-h">Active batches</h2>
               <div className="panel" style={{ padding: 0, marginBottom: 24 }}>
                 <table>
-                  <thead><tr><th>Batch</th><th>Status</th><th>Size</th><th>Generated</th><th>Failed</th><th>Pending</th><th></th></tr></thead>
+                  <thead><tr>
+                    <SortTh label="Batch" k="batch_id" sort={sort} onSort={onSort} />
+                    <SortTh label="Status" k="status" sort={sort} onSort={onSort} />
+                    <SortTh label="Size" k="size" sort={sort} onSort={onSort} />
+                    <SortTh label="Generated" k="generated" sort={sort} onSort={onSort} />
+                    <SortTh label="Failed" k="failed" sort={sort} onSort={onSort} />
+                    <SortTh label="Pending" k="pending" sort={sort} onSort={onSort} />
+                    <th></th>
+                  </tr></thead>
                   <tbody>
-                    {prog.active_batches.map((b) => (
+                    {activeBatches.map((b) => (
                       <tr key={b.batch_id}>
                         <td className="mono">#{b.batch_id}</td>
                         <td><Badge kind="status" value={b.status === 'in_progress' ? 'generated' : 'pending'} /></td>

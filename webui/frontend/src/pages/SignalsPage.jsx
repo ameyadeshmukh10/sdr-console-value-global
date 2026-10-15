@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api.js'
 import { Stat, Spinner, ErrorBanner, num } from '../components/ui.jsx'
+import { SortTh, useSort } from '../components/sortable.jsx'
 import SignalDetail from '../components/SignalDetail.jsx'
 
 // Signal cache — per-company research reused for 90 days so a company is searched
@@ -16,21 +17,6 @@ const NO_TECH = 'No signals detected'
 const NO_HIRING = 'No open roles detected'
 const NO_NEWS = 'No ERP news signals detected'
 
-// Sortable header cell: click cycles ascending → descending → server default.
-// The control is a native button (keyboard-operable); aria-sort stays on the th.
-function SortTh({ label, k, sort, onSort, width }) {
-  const active = sort?.key === k
-  return (
-    <th style={{ width, whiteSpace: 'nowrap' }}
-      aria-sort={active ? (sort.dir === 1 ? 'ascending' : 'descending') : undefined}>
-      <button type="button" className="th-sort" onClick={() => onSort(k)}
-        title={`Sort by ${label.toLowerCase()}`}>
-        {label}{active ? (sort.dir === 1 ? ' ▲' : ' ▼') : ''}
-      </button>
-    </th>
-  )
-}
-
 export default function SignalsPage() {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
@@ -40,11 +26,6 @@ export default function SignalsPage() {
   const [hiringJob, setHiringJob] = useState(null)
   const [newsJob, setNewsJob] = useState(null)
   const [openDomain, setOpenDomain] = useState(null)
-  const [sort, setSort] = useState(null) // { key, dir: 1|-1 } | null = server order
-
-  function toggleSort(k) {
-    setSort((s) => (!s || s.key !== k) ? { key: k, dir: 1 } : s.dir === 1 ? { key: k, dir: -1 } : null)
-  }
 
   function load() {
     api.signals().then((d) => { setData(d); setError(null) }).catch((e) => setError(e.message))
@@ -135,20 +116,9 @@ export default function SignalsPage() {
   }, [newsJob?.job_id, newsJob?.status])
 
   const signals = useMemo(() => data?.signals || [], [data])
-  // Client-side sort (the list is returned unpaginated); null/missing values
-  // always sink to the bottom regardless of direction.
-  const sorted = useMemo(() => {
-    if (!sort) return signals
-    const { key, dir } = sort
-    return [...signals].sort((a, b) => {
-      const av = a[key], bv = b[key]
-      if (av == null && bv == null) return 0
-      if (av == null) return 1
-      if (bv == null) return -1
-      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir
-      return String(av).localeCompare(String(bv), undefined, { sensitivity: 'base' }) * dir
-    })
-  }, [signals, sort])
+  // Client-side sort (the list is returned unpaginated); click cycles
+  // ascending → descending → server order, blanks always last.
+  const { rows: sorted, sort, onSort: toggleSort } = useSort(signals)
   const fresh = signals.filter((s) => s.fresh).length
   const withTrigger = signals.filter((s) => s.trigger).length
   const scanned = signals.filter((s) => s.tech_age_days != null).length
