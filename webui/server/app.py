@@ -797,8 +797,12 @@ def analytics_payload():
         # display the current metric without waiting for a refresh.
         s["interested_rate_pct"] = rate(s.get("interested") or 0, s.get("unique_replies") or 0)
         steps_by_campaign.setdefault(s.get("campaign_id"), []).append(s)
+    # Bounce rate = bounced ÷ emails sent (Bison's definition); snapshots without
+    # emails_sent fall back to leads contacted.
+    sent_of = lambda c: c.get("emails_sent") or c.get("total_leads_contacted") or 0
     for c in campaigns:
         c["interested_rate_pct"] = rate(c.get("interested") or 0, c.get("unique_replies") or 0)
+        c["bounce_rate_pct"] = rate(c.get("bounced") or 0, sent_of(c))
         c["steps"] = sorted(steps_by_campaign.get(c.get("campaign_id"), []),
                             key=lambda s: s.get("step_number", 0))
 
@@ -806,6 +810,8 @@ def analytics_payload():
     total_interested = sum(c.get("interested") or 0 for c in campaigns)
     total_replies = sum(c.get("unique_replies") or 0 for c in campaigns)
     total_leads = sum(c.get("total_leads") or 0 for c in campaigns)
+    total_bounced = sum(c.get("bounced") or 0 for c in campaigns)
+    total_sent = sum(sent_of(c) for c in campaigns)
 
     return {
         "fetched_at": last_run.get("fetched_at"),
@@ -817,6 +823,8 @@ def analytics_payload():
             "total_interested": total_interested,
             "overall_reply_rate_pct": rate(total_replies, total_contacted),
             "overall_interested_rate_pct": rate(total_interested, total_replies),
+            "total_bounced": total_bounced,
+            "overall_bounce_rate_pct": rate(total_bounced, total_sent),
         },
         "errors": last_run.get("errors", []),
     }
