@@ -1,14 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { Spinner, ErrorBanner, num } from '../components/ui.jsx'
+import { isStale } from '../autoRefresh.js'
 import InboxList from '../components/replies/InboxList.jsx'
 import ReplyDetail from '../components/replies/ReplyDetail.jsx'
 
-// VG runs a single default Bison campaign for now; per-variant campaigns can
-// be added here once created in Bison (the filter passes the raw id through).
-const CAMPAIGNS = [
-  { id: '', label: 'All campaigns' },
-]
+// Why a scan dropped email replies before classifying (classify_replies.py `filtered`).
+const FILTER_LABELS = {
+  automated: 'auto-replies',
+  non_lead: 'not a known lead',
+  junk_sender: 'system / junk senders',
+  skip_subject: 'internal test mail',
+}
+
+// Last non-empty line of a script's stderr — usually the actual error.
+const lastLine = (txt) => (txt || '').trim().split('\n').filter(Boolean).pop() || ''
 const MIN_CONF = 0.50  // only interested/referral above this confidence surface for review
 
 // Replies — an email-inbox view over both channels (Bison email + HeyReach
@@ -38,11 +44,18 @@ export default function RepliesPage() {
   const [domainPrompt, setDomainPrompt] = useState({})  // reply_id -> needs a hand-typed domain
   const [domainInput, setDomainInput] = useState({})    // reply_id -> typed company domain
   const timers = useRef({})
+  const autoScanned = useRef(false)   // auto-scan fires at most once per page open
 
-  const loadQueue = () => api.repliesQueue().then(setQueue).catch((e) => setError(e.message))
+  const loadQueue = () => api.repliesQueue().then((q) => { setQueue(q); return q })
+    .catch((e) => { setError(e.message); return null })
   const loadDrafts = () => api.followupDrafts().then(setDrafts).catch(() => {})
   useEffect(() => {
-    loadQueue(); loadDrafts()
+    loadQueue().then((q) => {
+      if (autoScanned.current) return
+      autoScanned.current = true
+      if (q && isStale(q.scanned_at)) scan()
+    })
+    loadDrafts()
     api.repliesAgents().then((r) => r.agents?.length && setAgents(r.agents)).catch(() => {})
   }, [])
 
@@ -93,7 +106,10 @@ export default function RepliesPage() {
     setScanning(true); setError(null); setMsg(null)
     try {
       const q = await api.scanReplies({ lookback_days: Number(lookback), campaign_id: campaign ? Number(campaign) : null })
-      if (q.ok === false) setMsg({ err: true, text: 'Scan returned errors — see results.' })
+      if (q.ok === false) {
+        const err = [q.scan, q.li_scan].filter((r) => r && r.returncode !== 0).map((r) => lastLine(r.stderr || r.stdout))
+        setMsg({ err: true, text: `Scan returned errors${err.length ? `: ${err.join(' · ')}` : '.'}` })
+      }
       await Promise.all([loadQueue(), loadDrafts()])
     } catch (e) { setError(e.message) }
     finally { setScanning(false) }
@@ -250,6 +266,16 @@ export default function RepliesPage() {
   }, [queue, drafts, channelFilter])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const autosync = queue?.hubspot_autosync
+
+  // What the last scan saw vs. dropped — so an empty inbox explains itself.
+  const c = queue?.counts
+  const dropped = Object.entries(queue?.email_filtered || {}).filter(([, n]) => n > 0)
+    .map(([k, n]) => `${num(n)} ${FILTER_LABELS[k] || k}`)
+  const scanSummary = queue?.available && c ? [
+    `Last scan: ${num(c.email_scanned)} email${c.linkedin_scanned ? ` + ${num(c.linkedin_scanned)} LinkedIn` : ''} replies classified`,
+    dropped.length ? `filtered out ${dropped.join(', ')}` : null,
+    c.out_of_window ? `${num(c.out_of_window)} older than the lookback window` : null,
+  ].filter(Boolean).join(' · ') : null
   const sections = [
     {
       key: 'interested', label: 'Interested — draft & send', items: interested,
@@ -286,7 +312,8 @@ export default function RepliesPage() {
           </label>
           <label className="field">Campaign
             <select value={campaign} onChange={(e) => setCampaign(e.target.value)}>
-              {CAMPAIGNS.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+              <option value="">All campaigns</option>
+              {(queue?.campaigns || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </label>
           <button onClick={scan} disabled={scanning}>
@@ -318,6 +345,7 @@ export default function RepliesPage() {
 
       <ErrorBanner error={error} />
       {msg && <div className={`banner ${msg.err ? 'warn' : 'info'}`}>{msg.text}</div>}
+      {scanSummary && <div className="muted" style={{ fontSize: 12.5, margin: '-6px 0 12px' }}>{scanSummary}</div>}
 
       {!queue ? <Spinner label="Loading…" /> : !queue.available ? (
         <div className="empty">No replies scanned yet — set a lookback and <b>Scan inbox</b>.</div>

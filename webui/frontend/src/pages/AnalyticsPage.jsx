@@ -5,6 +5,7 @@ import {
 import { api } from '../api.js'
 import { Stat, Spinner, ErrorBanner, num, pct, EmailIcon, LinkedInIcon } from '../components/ui.jsx'
 import { BRAND, TOOLTIP_STYLE } from '../theme.js'
+import { isStale } from '../autoRefresh.js'
 
 // Pillar 3 — Analytics: campaign performance from cached stats, refreshable live.
 
@@ -35,7 +36,7 @@ export default function AnalyticsPage() {
     load().then((d) => {
       if (autoChecked.current.stats) return
       autoChecked.current.stats = true
-      if (d && _isStale(d.fetched_at)) refresh()
+      if (d && isStale(d.fetched_at)) refresh()
     })
   }, [])
   useEffect(() => { api.linkedinAnalytics().then(setLi).catch(() => setLi({ error: 'unreachable' })) }, [])
@@ -45,7 +46,7 @@ export default function AnalyticsPage() {
       autoChecked.current.aisdr = true
       // last_sync_at is stamped by every run, failed ones included — so a broken
       // config retries at most hourly instead of on every page open.
-      if (d && d.configured !== false && !d.error && _isStale(d.last_sync_at)) syncAisdr()
+      if (d && d.configured !== false && !d.error && isStale(d.last_sync_at)) syncAisdr()
     })
   }, [])
 
@@ -250,11 +251,4 @@ export default function AnalyticsPage() {
       )}
     </div>
   )
-}
-
-// Opening the page auto-refreshes anything never synced or synced >= this long ago.
-const AUTO_REFRESH_MS = 60 * 60 * 1000
-const _isStale = (iso) => {
-  const t = iso ? new Date(iso).getTime() : NaN
-  return Number.isNaN(t) || Date.now() - t >= AUTO_REFRESH_MS
 }

@@ -2971,6 +2971,18 @@ def _attach_threads(items):
     return items
 
 
+def replies_campaigns():
+    """Campaigns for the Replies view's filter: the configured BISON_CAMPAIGN_ID,
+    named from the cached Analytics snapshot (no live Bison call). One entry for
+    now — multi-campaign support will extend this list."""
+    cid = default_campaign_id()
+    if cid is None:
+        return []
+    names = {str(c.get("campaign_id")): c.get("campaign_name")
+             for c in read_jsonl(CAMPAIGN_STATS / "campaigns.jsonl")}
+    return [{"id": cid, "name": names.get(str(cid)) or f"Campaign #{cid}"}]
+
+
 def review_queue_payload():
     """Unified review queue: email (Bison) + LinkedIn (HeyReach) replies in one
     list, each item carrying a `channel`. Counts are summed across channels.
@@ -2979,7 +2991,7 @@ def review_queue_payload():
     email = _read_json(REVIEW_QUEUE) or {}
     li = _read_json(LI_REVIEW_QUEUE) or {}
     if not email and not li:
-        return {"available": False, "items": []}
+        return {"available": False, "items": [], "campaigns": replies_campaigns()}
     for it in (email.get("items") or []):
         it.setdefault("channel", "email")
     items = list(email.get("items") or []) + list(li.get("items") or [])
@@ -3020,12 +3032,17 @@ def review_queue_payload():
         "dismissed": len(dismissed),
         "email_scanned": ec.get("scanned") or 0,
         "linkedin_scanned": lc.get("scanned") or 0,
+        "out_of_window": email.get("out_of_window") or 0,
     }
     return {
         "available": True,
         "items": active,
         "dismissed": dismissed,
         "counts": counts,
+        # Why email replies never reached the queue (automated / non_lead / …),
+        # so an empty inbox explains itself instead of looking broken.
+        "email_filtered": email.get("filtered") or {},
+        "campaigns": replies_campaigns(),
         "scanned_at": email.get("scanned_at") or li.get("scanned_at"),
         "lookback_days": email.get("lookback_days") or li.get("lookback_days"),
         "linkedin": {"configured": bool(li.get("configured")), "error": li.get("error")},
