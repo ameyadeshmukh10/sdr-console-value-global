@@ -32,7 +32,7 @@ Then update the commit SHA above and re-run
 
 ## Dependencies
 
-- **Runtime (prod):** `dnspython` only (declared in the repo-root `requirements.txt`;
+- **Runtime (prod):** `dnspython` only (declared in the repo-root `pyproject.toml`;
   imported by `dns_collector.py`). All imports of this package MUST stay lazy so the
   web server boots without it.
 - **Optional, never installed in the Railway image:** `click` (only `cli.py`, which
