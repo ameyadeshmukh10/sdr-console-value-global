@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import { Spinner, ErrorBanner, num } from './ui.jsx'
+import { SortTh, useSort } from './sortable.jsx'
 import OutreachDetail from './OutreachDetail.jsx'
 
 // campaigns route by variant first, then persona, then BISON_CAMPAIGN_ID —
@@ -64,6 +65,12 @@ export default function EnrollPanel({ generatedReady, awaitingApproval = 0, onCh
   }
 
   const byCampaign = preview?.by_campaign || {}
+  // Sort the whole preview, then show the first 200 — a sort must reach every row.
+  const preview200 = useSort(preview?.rows, {
+    contact: (r) => [r.first_name, r.last_name].filter(Boolean).join(' '),
+    cta: (r) => r.cta_type,
+  })
+  const skipped = useSort(result?.rows.filter((r) => r.skipped))
 
   return (
     <div className="panel">
@@ -147,9 +154,15 @@ export default function EnrollPanel({ generatedReady, awaitingApproval = 0, onCh
               </div>
               <div className="panel" style={{ padding: 0, maxHeight: 360, overflow: 'auto' }}>
                 <table>
-                  <thead><tr><th>Contact</th><th>Persona</th><th>CTA</th><th>Signal</th><th>Campaign</th></tr></thead>
+                  <thead><tr>
+                    <SortTh label="Contact" k="contact" sort={preview200.sort} onSort={preview200.onSort} />
+                    <SortTh label="Persona" k="persona" sort={preview200.sort} onSort={preview200.onSort} />
+                    <SortTh label="CTA" k="cta" sort={preview200.sort} onSort={preview200.onSort} />
+                    <SortTh label="Signal" k="signal" sort={preview200.sort} onSort={preview200.onSort} />
+                    <SortTh label="Campaign" k="campaign" sort={preview200.sort} onSort={preview200.onSort} />
+                  </tr></thead>
                   <tbody>
-                    {preview.rows.slice(0, 200).map((r, i) => (
+                    {preview200.rows.slice(0, 200).map((r, i) => (
                       <tr key={i} className={r.contact_id ? 'clickable' : ''}
                           onClick={() => r.contact_id && setOpenId(r.contact_id)}>
                         <td>
@@ -183,9 +196,12 @@ export default function EnrollPanel({ generatedReady, awaitingApproval = 0, onCh
           {result.rows.filter((r) => r.skipped).length > 0 && (
             <div className="panel" style={{ padding: 0, marginTop: 12, maxHeight: 220, overflow: 'auto' }}>
               <table>
-                <thead><tr><th>Skipped</th><th>Reason</th></tr></thead>
+                <thead><tr>
+                  <SortTh label="Skipped" k="email" sort={skipped.sort} onSort={skipped.onSort} />
+                  <SortTh label="Reason" k="reason" sort={skipped.sort} onSort={skipped.onSort} />
+                </tr></thead>
                 <tbody>
-                  {result.rows.filter((r) => r.skipped).map((r, i) => (
+                  {skipped.rows.map((r, i) => (
                     <tr key={i}><td className="mono">{r.email}</td><td style={{ color: 'var(--amber)' }}>{r.reason}</td></tr>
                   ))}
                 </tbody>

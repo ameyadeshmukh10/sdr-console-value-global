@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import { Badge, Spinner, ErrorBanner, num } from '../components/ui.jsx'
+import { SortTh, nextSort } from '../components/sortable.jsx'
 import OutreachDetail from '../components/OutreachDetail.jsx'
 
 // Pillar 4 — Transparency + the outreach approval gate: browse/search the
@@ -16,25 +17,11 @@ const SEGMENT_LABELS = {
   no_signals: 'No signals found', suppressed: 'Suppressed',
 }
 
-// Sortable column header (same affordance as the Signals table). The sort is
-// applied server-side — the list is server-paginated, so a client sort would
-// only reorder one page.
-function SortTh({ label, k, sort, onSort }) {
-  const active = sort.key === k
-  return (
-    <th style={{ whiteSpace: 'nowrap' }}
-      aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
-      <button type="button" className="th-sort" onClick={() => onSort(k)}
-        title={`Sort by ${label.toLowerCase()}`}>
-        {label}{active ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
-      </button>
-    </th>
-  )
-}
-
 export default function OutreachPage() {
   const [filters, setFilters] = useState({ persona: '', cta: '', status: '', segment: '', q: '', group_by: '', approved: '' })
-  const [sort, setSort] = useState({ key: '', dir: 'asc' })
+  // Sorted server-side — the list is server-paginated, so a client sort would
+  // only reorder one page. null = the server's default order.
+  const [sort, setSort] = useState(null)
   const [page, setPage] = useState(1)
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
@@ -48,7 +35,7 @@ export default function OutreachPage() {
   useEffect(() => {
     setLoading(true)
     const params = { ...filters, page, page_size: PAGE_SIZE }
-    if (sort.key) { params.sort = sort.key; params.dir = sort.dir }
+    if (sort) { params.sort = sort.key; params.dir = sort.dir }
     Object.keys(params).forEach((k) => params[k] === '' && delete params[k])
     api.outreach(params)
       .then((d) => { setData(d); setError(null) })
@@ -59,8 +46,7 @@ export default function OutreachPage() {
   function setF(key, val) { setPage(1); setFilters((f) => ({ ...f, [key]: val })) }
   function toggleSort(k) {
     setPage(1)
-    setSort((s) => (s.key === k ? { key: k, dir: s.dir === 'asc' ? 'desc' : 'asc' }
-      : { key: k, dir: 'asc' }))
+    setSort((s) => nextSort(s, k))
   }
   const reload = () => setReloadTick((t) => t + 1)
 
@@ -201,7 +187,8 @@ export default function OutreachPage() {
               <SortTh label="CTA play" k="cta_type" sort={sort} onSort={toggleSort} />
               <SortTh label="Trigger" k="segment" sort={sort} onSort={toggleSort} />
               <SortTh label="Status" k="status" sort={sort} onSort={toggleSort} />
-              <th>Approval</th><th>Signal</th>
+              <SortTh label="Approval" k="approval" sort={sort} onSort={toggleSort} />
+              <SortTh label="Signal" k="signal" sort={sort} onSort={toggleSort} />
             </tr>
           </thead>
           <tbody>

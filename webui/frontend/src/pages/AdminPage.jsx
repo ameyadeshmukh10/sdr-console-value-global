@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from 'react'
 import { api } from '../api.js'
 import { useAuth } from '../AuthContext.jsx'
 import { Spinner, ErrorBanner } from '../components/ui.jsx'
+import { SortTh, useSort } from '../components/sortable.jsx'
 
 // Admin — console logins. Create an email + password sign-in for a teammate,
 // reset a password, change a role, or remove a login.
@@ -191,6 +192,11 @@ export default function AdminPage() {
   }
 
   const users = data?.users || []
+  // Built-ins show "in code" / "—" instead of dates — sort them after the dated rows.
+  const { rows: sortedUsers, sort, onSort } = useSort(users, {
+    created_at: (u) => (u.builtin ? null : u.created_at),
+    password_changed_at: (u) => (u.builtin ? null : u.password_changed_at),
+  })
   const minPassword = data?.min_password || 10
 
   return (
@@ -216,15 +222,15 @@ export default function AdminPage() {
             <table>
               <thead>
                 <tr>
-                  <th>Email</th>
-                  <th>Role</th>
-                  <th>Created</th>
-                  <th>Password set</th>
+                  <SortTh label="Email" k="email" sort={sort} onSort={onSort} />
+                  <SortTh label="Role" k="role" sort={sort} onSort={onSort} />
+                  <SortTh label="Created" k="created_at" sort={sort} onSort={onSort} />
+                  <SortTh label="Password set" k="password_changed_at" sort={sort} onSort={onSort} />
                   <th style={{ textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {users.map((u) => {
+                {sortedUsers.map((u) => {
                   const isMe = u.email === me
                   const locked = u.builtin
                   const busy = busyRow === u.email

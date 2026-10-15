@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api.js'
 import { Spinner, ErrorBanner, num } from './ui.jsx'
+import { SortTh, useSort } from './sortable.jsx'
 import SignalDetail from './SignalDetail.jsx'
 
 // Stage 2-4 of the gated flow: after a list pull / CSV upload, signal
@@ -61,8 +62,13 @@ export default function SegmentsPanel({ onChanged, onGeneration }) {
     finally { setBusy(null) }
   }
 
+  const segs = useMemo(() => (data?.segments || []).filter((s) => s.accounts.length > 0), [data])
+  const { rows: sortedSegs, sort, onSort } = useSort(segs, {
+    accounts: (s) => s.accounts.length,
+    contacts: (s) => s.contact_total,
+  })
+
   if (!data) return null
-  const segs = (data.segments || []).filter((s) => s.accounts.length > 0)
   const pending = data.pending || []
   const nothing = data.accounts === 0
   if (nothing && !intelRunning && !result) return null
@@ -126,10 +132,14 @@ export default function SegmentsPanel({ onChanged, onGeneration }) {
         <>
           <table className="dense" style={{ marginBottom: 12 }}>
             <thead><tr>
-              <th style={{ width: 30 }}></th><th>Segment</th><th>Accounts</th><th>Contacts</th><th></th><th></th>
+              <th style={{ width: 30 }}></th>
+              <SortTh label="Segment" k="label" sort={sort} onSort={onSort} />
+              <SortTh label="Accounts" k="accounts" sort={sort} onSort={onSort} />
+              <SortTh label="Contacts" k="contacts" sort={sort} onSort={onSort} />
+              <th></th><th></th>
             </tr></thead>
             <tbody>
-              {segs.map((s) => (
+              {sortedSegs.map((s) => (
                 <tr key={s.id}>
                   <td onClick={(e) => e.stopPropagation()}>
                     {s.id !== 'suppressed' && (
@@ -169,37 +179,7 @@ export default function SegmentsPanel({ onChanged, onGeneration }) {
                 <p className="muted" style={{ fontSize: 12, margin: '10px 14px 0' }}>
                   Click a row for the full signal detail.
                 </p>
-                <table className="dense">
-                  <thead><tr><th>Account</th><th>Contacts</th>{s.kind === 'trigger' && <th>Score</th>}<th>Signal</th></tr></thead>
-                  <tbody>
-                    {s.accounts.map((a) => (
-                      <tr key={a.domain} className="clickable" tabIndex={0}
-                        onClick={() => setOpenDomain(a.domain)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpenDomain(a.domain) }
-                        }}>
-                        <td>
-                          <span className="mono">{a.domain}</span>
-                          {a.company && <span className="muted" style={{ marginLeft: 8 }}>{a.company}</span>}
-                          {a.flags && Object.entries(a.flags).map(([f, n]) => (
-                            <span key={f} className="badge muted" style={{ marginLeft: 6, fontSize: 10 }}
-                              title="import-time quality flag">{n > 1 ? `${n}× ` : ''}{f.replace(/_/g, ' ')}</span>
-                          ))}
-                          {a.suppression_review && (
-                            <span className="badge danger" style={{ marginLeft: 6, fontSize: 10 }}
-                              title="Close to a do-not-contact rule — check before approving">
-                              near-miss: {a.suppression_review.rule}
-                            </span>
-                          )}
-                        </td>
-                        <td>{num(a.contacts)}</td>
-                        {s.kind === 'trigger' && <td>{a.score ?? '—'}</td>}
-                        <td className="muted" style={{ maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                          title={a.headline}>{a.headline || a.tech || '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <SegmentAccountsTable key={s.id} seg={s} onOpen={setOpenDomain} />
               </div>
             )
           })()}
@@ -227,5 +207,49 @@ export default function SegmentsPanel({ onChanged, onGeneration }) {
         <SignalDetail domain={openDomain} onClose={() => setOpenDomain(null)} onChanged={() => load()} />
       )}
     </div>
+  )
+}
+
+function SegmentAccountsTable({ seg: s, onOpen }) {
+  const { rows, sort, onSort } = useSort(s.accounts, {
+    signal: (a) => a.headline || a.tech,
+  })
+  return (
+    <table className="dense">
+      <thead><tr>
+        <SortTh label="Account" k="domain" sort={sort} onSort={onSort} />
+        <SortTh label="Contacts" k="contacts" sort={sort} onSort={onSort} />
+        {s.kind === 'trigger' && <SortTh label="Score" k="score" sort={sort} onSort={onSort} />}
+        <SortTh label="Signal" k="signal" sort={sort} onSort={onSort} />
+      </tr></thead>
+      <tbody>
+        {rows.map((a) => (
+          <tr key={a.domain} className="clickable" tabIndex={0}
+            onClick={() => onOpen(a.domain)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.domain) }
+            }}>
+            <td>
+              <span className="mono">{a.domain}</span>
+              {a.company && <span className="muted" style={{ marginLeft: 8 }}>{a.company}</span>}
+              {a.flags && Object.entries(a.flags).map(([f, n]) => (
+                <span key={f} className="badge muted" style={{ marginLeft: 6, fontSize: 10 }}
+                  title="import-time quality flag">{n > 1 ? `${n}× ` : ''}{f.replace(/_/g, ' ')}</span>
+              ))}
+              {a.suppression_review && (
+                <span className="badge danger" style={{ marginLeft: 6, fontSize: 10 }}
+                  title="Close to a do-not-contact rule — check before approving">
+                  near-miss: {a.suppression_review.rule}
+                </span>
+              )}
+            </td>
+            <td>{num(a.contacts)}</td>
+            {s.kind === 'trigger' && <td>{a.score ?? '—'}</td>}
+            <td className="muted" style={{ maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              title={a.headline}>{a.headline || a.tech || '—'}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   )
 }

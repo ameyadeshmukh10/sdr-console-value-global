@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import { Badge, Spinner, ErrorBanner } from './ui.jsx'
+import { SortTh, useSort } from './sortable.jsx'
 
 // Slide-over drawer for one cached account: the full research signal, the
 // technographic detection breakdown (per-vendor source/confidence/evidence +
@@ -66,6 +67,13 @@ export default function SignalDetail({ domain, onClose, onChanged }) {
   const techOff = d ? d.tech_available === false : false
   const hiringOff = d ? d.hiring_available === false : false
   const newsOff = d ? d.news_available === false : false
+  const detSort = useSort(dets, {
+    vendor: (x) => x.vendor_name,
+    evidence: (x) => (x.evidence || []).join('\n'),
+  })
+  const contactSort = useSort(contacts, {
+    name: (c) => `${c.first_name || ''} ${c.last_name || ''}`.trim(),
+  })
 
   return (
     <>
@@ -154,9 +162,15 @@ export default function SignalDetail({ domain, onClose, onChanged }) {
                 <div className="touch"><div className="body">{s.tech_signals}</div></div>
                 {dets.length > 0 && (
                   <table className="dense" style={{ marginBottom: 14 }}>
-                    <thead><tr><th>Vendor</th><th>Bucket</th><th>Src</th><th>Conf</th><th>Evidence</th></tr></thead>
+                    <thead><tr>
+                      <SortTh label="Vendor" k="vendor" sort={detSort.sort} onSort={detSort.onSort} />
+                      <SortTh label="Bucket" k="bucket" sort={detSort.sort} onSort={detSort.onSort} />
+                      <SortTh label="Src" k="source" sort={detSort.sort} onSort={detSort.onSort} />
+                      <SortTh label="Conf" k="confidence" sort={detSort.sort} onSort={detSort.onSort} />
+                      <SortTh label="Evidence" k="evidence" sort={detSort.sort} onSort={detSort.onSort} />
+                    </tr></thead>
                     <tbody>
-                      {dets.map((x) => (
+                      {detSort.rows.map((x) => (
                         <tr key={x.vendor_id}>
                           <td>{x.vendor_name}{x.tier_signal ? <span className="badge cta" style={{ marginLeft: 6 }}>{x.tier_signal}</span> : null}</td>
                           <td className="muted">{x.bucket || <span className="muted">—</span>}</td>
@@ -284,9 +298,15 @@ export default function SignalDetail({ domain, onClose, onChanged }) {
               <p className="muted">No contacts reference this domain.</p>
             ) : (
               <table className="dense">
-                <thead><tr><th>Name</th><th>Title</th><th>Persona</th><th>Status</th><th>Batch</th></tr></thead>
+                <thead><tr>
+                  <SortTh label="Name" k="name" sort={contactSort.sort} onSort={contactSort.onSort} />
+                  <SortTh label="Title" k="title" sort={contactSort.sort} onSort={contactSort.onSort} />
+                  <SortTh label="Persona" k="persona" sort={contactSort.sort} onSort={contactSort.onSort} />
+                  <SortTh label="Status" k="status" sort={contactSort.sort} onSort={contactSort.onSort} />
+                  <SortTh label="Batch" k="batch_id" sort={contactSort.sort} onSort={contactSort.onSort} />
+                </tr></thead>
                 <tbody>
-                  {contacts.map((c) => (
+                  {contactSort.rows.map((c) => (
                     <tr key={c.contact_id}>
                       <td>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || <span className="muted">—</span>}</td>
                       <td className="muted" style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.title}>{c.title || '—'}</td>

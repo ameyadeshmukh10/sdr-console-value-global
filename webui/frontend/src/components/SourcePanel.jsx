@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { Spinner, ErrorBanner, num } from './ui.jsx'
+import { SortTh, useSort } from './sortable.jsx'
 
 // Clay buying-group enrichment for a selected HubSpot company list. Connects Clay
 // (OAuth) if needed, then runs the backend enrich job: end-to-end (commit
@@ -226,6 +227,32 @@ export default function SourcePanel({ list, onChanged }) {
   )
 }
 
+function CandidatesTable({ cands }) {
+  const { rows, sort, onSort } = useSort(cands, {
+    name: (c) => [c.first_name, c.last_name].filter(Boolean).join(' '),
+  })
+  return (
+    <table>
+      <thead><tr>
+        <SortTh label="Name" k="name" sort={sort} onSort={onSort} />
+        <SortTh label="Title" k="title" sort={sort} onSort={onSort} />
+        <SortTh label="Email" k="email" sort={sort} onSort={onSort} />
+        <SortTh label="Company" k="company" sort={sort} onSort={onSort} />
+      </tr></thead>
+      <tbody>
+        {rows.map((c, i) => (
+          <tr key={c.email || i}>
+            <td>{[c.first_name, c.last_name].filter(Boolean).join(' ') || '—'}</td>
+            <td className="muted">{c.title || '—'}</td>
+            <td className="mono">{c.email}</td>
+            <td className="muted">{c.company || '—'}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
 function JobView({ job, onApprove, busy }) {
   if (job.status === 'error') {
     return <div className="banner error" style={{ marginTop: 14 }}>{job.error}</div>
@@ -270,19 +297,7 @@ function JobView({ job, onApprove, busy }) {
           </button>
         </div>
         <div className="panel" style={{ padding: 0, maxHeight: 320, overflow: 'auto' }}>
-          <table>
-            <thead><tr><th>Name</th><th>Title</th><th>Email</th><th>Company</th></tr></thead>
-            <tbody>
-              {cands.map((c, i) => (
-                <tr key={c.email || i}>
-                  <td>{[c.first_name, c.last_name].filter(Boolean).join(' ') || '—'}</td>
-                  <td className="muted">{c.title || '—'}</td>
-                  <td className="mono">{c.email}</td>
-                  <td className="muted">{c.company || '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <CandidatesTable cands={cands} />
         </div>
       </div>
     )
