@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
-import { Badge, Spinner, ErrorBanner, num } from '../components/ui.jsx'
+import { Badge, Spinner, ErrorBanner, FlagChips, flagLabel, num } from '../components/ui.jsx'
 import { SortTh, nextSort } from '../components/sortable.jsx'
 import OutreachDetail from '../components/OutreachDetail.jsx'
 
 // Pillar 4 — Transparency + the outreach approval gate: browse/search the
 // generated outreach, open any lead's full copy (now editable), and approve
 // gated copy for enrollment — per row, in bulk for the selection, or all.
+// Lead-quality flags (outside US/CA, <1,000 employees, healthcare) are a
+// column + filter so off-ICP contacts can be found and un-approved before
+// enrollment.
 const PAGE_SIZE = 50
 
 // Display names for the trigger segments (facet values are the raw ids).
@@ -18,7 +21,7 @@ const SEGMENT_LABELS = {
 }
 
 export default function OutreachPage() {
-  const [filters, setFilters] = useState({ persona: '', cta: '', status: '', segment: '', q: '', group_by: '', approved: '' })
+  const [filters, setFilters] = useState({ persona: '', cta: '', status: '', segment: '', q: '', group_by: '', approved: '', flag: '' })
   // Sorted server-side — the list is server-paginated, so a client sort would
   // only reorder one page. null = the server's default order.
   const [sort, setSort] = useState(null)
@@ -51,6 +54,10 @@ export default function OutreachPage() {
   const reload = () => setReloadTick((t) => t + 1)
 
   const approvable = (r) => r.gated && r.status === 'generated' && !r.approved
+  // selectable = still at the outreach gate, approved or not (approved rows can
+  // be un-approved until they enroll)
+  const selectable = (r) => r.gated && r.status === 'generated'
+  const pageSelectable = (data?.items || []).filter(selectable)
   const pageApprovable = (data?.items || []).filter(approvable)
   const selIds = Object.keys(selected).filter((k) => selected[k])
 
@@ -62,6 +69,21 @@ export default function OutreachPage() {
       else {
         setApproveNote(`Approved ${r.approved} contact${r.approved === 1 ? '' : 's'} for enrollment` +
           (r.review?.enroll_ready != null ? ` — ${r.review.enroll_ready} now ready to enroll (Pipeline tab).` : '.'))
+        setSelected({})
+        reload()
+      }
+    } catch (e) { setError(e.message) }
+    finally { setApproving(null) }
+  }
+
+  async function unapprove(ids) {
+    setApproving('unsel'); setError(null); setApproveNote(null)
+    try {
+      const r = await api.unapproveOutreach({ contact_ids: ids })
+      if (r.ok === false) setError(r.error || 'un-approve failed')
+      else {
+        setApproveNote(`Un-approved ${r.unapproved} contact${r.unapproved === 1 ? '' : 's'} — they won't enroll until re-approved` +
+          (r.review?.enroll_ready != null ? ` (${r.review.enroll_ready} now ready to enroll).` : '.'))
         setSelected({})
         reload()
       }
@@ -117,6 +139,16 @@ export default function OutreachPage() {
             <option value="yes">Approved</option>
           </select>
         </label>
+        <label className="field">Lead flags
+          <select value={filters.flag} onChange={(e) => setF('flag', e.target.value)}>
+            <option value="">All</option>
+            <option value="off_icp">Off-ICP (any) ({facets.flags?.off_icp || 0})</option>
+            <option value="none">No flags</option>
+            {Object.entries(facets.flags || {}).filter(([k]) => k !== 'off_icp').map(([k, n]) => (
+              <option key={k} value={k}>{flagLabel(k)} ({n})</option>
+            ))}
+          </select>
+        </label>
         <label className="field">Group by
           <select value={filters.group_by} onChange={(e) => setF('group_by', e.target.value)}>
             <option value="">— none —</option>
@@ -138,6 +170,13 @@ export default function OutreachPage() {
             <button className="sm" disabled={!!approving}
               onClick={() => approve({ contact_ids: selIds }, 'sel')}>
               {approving === 'sel' ? <Spinner /> : `✓ Approve selected (${selIds.length})`}
+            </button>
+          )}
+          {selIds.length > 0 && (
+            <button className="ghost sm" disabled={!!approving}
+              title="Clear approval so these contacts are NOT enrolled (enrolled contacts are unaffected)"
+              onClick={() => unapprove(selIds)}>
+              {approving === 'unsel' ? <Spinner /> : `✕ Un-approve selected (${selIds.length})`}
             </button>
           )}
           <button className="ghost sm" disabled={!!approving}
@@ -168,14 +207,14 @@ export default function OutreachPage() {
           <thead>
             <tr>
               <th style={{ width: 34 }}>
-                {pageApprovable.length > 0 && (
+                {pageSelectable.length > 0 && (
                   <input type="checkbox" style={{ width: 'auto' }}
-                    checked={pageApprovable.every((r) => selected[r.contact_id])}
+                    checked={pageSelectable.every((r) => selected[r.contact_id])}
                     onChange={(e) => {
                       const on = e.target.checked
                       setSelected((m) => {
                         const next = { ...m }
-                        pageApprovable.forEach((r) => { next[r.contact_id] = on })
+                        pageSelectable.forEach((r) => { next[r.contact_id] = on })
                         return next
                       })
                     }} />
@@ -188,6 +227,7 @@ export default function OutreachPage() {
               <SortTh label="Trigger" k="segment" sort={sort} onSort={toggleSort} />
               <SortTh label="Status" k="status" sort={sort} onSort={toggleSort} />
               <SortTh label="Approval" k="approval" sort={sort} onSort={toggleSort} />
+              <SortTh label="Lead flags" k="flags" sort={sort} onSort={toggleSort} />
               <SortTh label="Signal" k="signal" sort={sort} onSort={toggleSort} />
             </tr>
           </thead>
@@ -195,7 +235,7 @@ export default function OutreachPage() {
             {data?.items?.map((r) => (
               <tr key={r.contact_id} className="clickable" onClick={() => setOpenId(r.contact_id)}>
                 <td onClick={(e) => e.stopPropagation()}>
-                  {approvable(r) && (
+                  {selectable(r) && (
                     <input type="checkbox" style={{ width: 'auto' }} checked={!!selected[r.contact_id]}
                       onChange={(e) => setSelected((m) => ({ ...m, [r.contact_id]: e.target.checked }))} />
                   )}
@@ -216,11 +256,12 @@ export default function OutreachPage() {
                       : r.status === 'generated' ? <span className="badge" style={{ color: 'var(--amber)', borderColor: 'var(--amber)' }}>awaiting</span>
                         : <span className="muted">—</span>}
                 </td>
+                <td><FlagChips flags={r.flags} country={r.country} /></td>
                 <td className="muted" style={{ maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.signal}</td>
               </tr>
             ))}
             {data && data.items.length === 0 && !loading && (
-              <tr><td colSpan={9}><div className="empty">No matching sequences.</div></td></tr>
+              <tr><td colSpan={10}><div className="empty">No matching sequences.</div></td></tr>
             )}
           </tbody>
         </table>

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
-import { Spinner, ErrorBanner, num } from './ui.jsx'
+import { Spinner, ErrorBanner, FlagChips, OFF_ICP_FLAGS, num } from './ui.jsx'
 import { SortTh, useSort } from './sortable.jsx'
 import OutreachDetail from './OutreachDetail.jsx'
 
@@ -65,10 +65,14 @@ export default function EnrollPanel({ generatedReady, awaitingApproval = 0, onCh
   }
 
   const byCampaign = preview?.by_campaign || {}
+  // off-ICP rows in the preview (outside US/CA, <1,000 employees, healthcare)
+  const offIcp = (preview?.rows || []).filter((r) =>
+    (r.flags || []).some((f) => OFF_ICP_FLAGS.includes(f.split(':')[0]))).length
   // Sort the whole preview, then show the first 200 — a sort must reach every row.
   const preview200 = useSort(preview?.rows, {
     contact: (r) => [r.first_name, r.last_name].filter(Boolean).join(' '),
     cta: (r) => r.cta_type,
+    flags: (r) => (r.flags || []).join(' '),
   })
   const skipped = useSort(result?.rows.filter((r) => r.skipped))
 
@@ -126,6 +130,12 @@ export default function EnrollPanel({ generatedReady, awaitingApproval = 0, onCh
             {Object.entries(byCampaign).map(([c, n]) => (
               <span key={c} className="badge">campaign {c} ({CAMPAIGN_PERSONA[c] || '?'}): {n}</span>
             ))}
+            {offIcp > 0 && (
+              <span className="badge" style={{ color: 'var(--amber)', borderColor: 'var(--amber)' }}
+                title="Outside US/CA, under 1,000 employees, or healthcare — un-approve them on the Outreach tab (Lead flags filter) to keep them out">
+                ⚠ {num(offIcp)} off-ICP
+              </span>
+            )}
           </div>
           {preview.rows.length === 0 && (
             <div className="banner info" style={{ marginBottom: 12 }}>
@@ -158,6 +168,7 @@ export default function EnrollPanel({ generatedReady, awaitingApproval = 0, onCh
                     <SortTh label="Contact" k="contact" sort={preview200.sort} onSort={preview200.onSort} />
                     <SortTh label="Persona" k="persona" sort={preview200.sort} onSort={preview200.onSort} />
                     <SortTh label="CTA" k="cta" sort={preview200.sort} onSort={preview200.onSort} />
+                    <SortTh label="Lead flags" k="flags" sort={preview200.sort} onSort={preview200.onSort} />
                     <SortTh label="Signal" k="signal" sort={preview200.sort} onSort={preview200.onSort} />
                     <SortTh label="Campaign" k="campaign" sort={preview200.sort} onSort={preview200.onSort} />
                   </tr></thead>
@@ -171,6 +182,7 @@ export default function EnrollPanel({ generatedReady, awaitingApproval = 0, onCh
                         </td>
                         <td><span className={`badge persona-${r.persona}`}>{r.persona}</span></td>
                         <td>{r.cta_type ? <span className="badge cta">{r.cta_type}</span> : '—'}</td>
+                        <td><FlagChips flags={r.flags} country={r.country} /></td>
                         <td className="muted" style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {r.signal || '—'}</td>
                         <td>{r.campaign}</td>

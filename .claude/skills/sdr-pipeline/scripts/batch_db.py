@@ -392,6 +392,23 @@ def approve_outreach(conn, contact_ids=None):
     return cur.rowcount
 
 
+def unapprove_outreach(conn, contact_ids):
+    """Undo approve_outreach for specific contacts: clears approved_at on gated
+    'generated' contacts so enrollment skips them until re-approved. Enrolled
+    contacts are untouched (status is no longer 'generated'). Returns the
+    number un-approved."""
+    ids = [str(c) for c in (contact_ids or [])]
+    if not ids:
+        return 0
+    qmarks = ",".join("?" * len(ids))
+    cur = conn.execute(
+        f"UPDATE contacts SET approved_at=NULL, updated_at=? "
+        f"WHERE COALESCE(gated,0)=1 AND status='generated' AND approved_at IS NOT NULL "
+        f"AND contact_id IN ({qmarks})", (now(), *ids))
+    conn.commit()
+    return cur.rowcount
+
+
 def requeue_failed_enrollments(conn):
     """Put contacts whose enrollment FAILED at the delivery step (Bison rejected
     the lead or the attach call errored — error text starts 'HTTP ' or 'attach:')

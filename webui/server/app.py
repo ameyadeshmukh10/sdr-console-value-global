@@ -468,7 +468,7 @@ def db_contact_meta():
             rows = conn.execute(
                 "SELECT contact_id, first_name, last_name, email, title, company, linkedin_url, "
                 "persona, domain, variant, status, error, batch_id, "
-                "COALESCE(gated,0) gated, segment, approved_at FROM contacts")
+                "COALESCE(gated,0) gated, segment, approved_at, country, import_flags FROM contacts")
         except sqlite3.Error:  # pre-approval-flow DB: fall back to the old shape
             rows = conn.execute(
                 "SELECT contact_id, first_name, last_name, email, title, company, linkedin_url, "
@@ -476,6 +476,30 @@ def db_contact_meta():
         for r in rows:
             out[r["contact_id"]] = dict(r)
     return out
+
+
+# Import-time lead-quality flags (csv_audience.lead_flags) that put a contact
+# outside the program ICP (US/CA, >=1,000 employees, no healthcare). The other
+# flags (no_linkedin, country_unknown) are informational.
+OFF_ICP_FLAGS = ("non_us_ca", "country_inferred", "below_icp_floor", "healthcare")
+
+
+def parse_import_flags(raw):
+    """contacts.import_flags JSON -> list of flag strings (never raises)."""
+    try:
+        flags = json.loads(raw) if raw else []
+    except (ValueError, TypeError):
+        return []
+    return [str(f) for f in flags if f] if isinstance(flags, list) else []
+
+
+def flag_key(flag):
+    """'country_inferred:pk' -> 'country_inferred' (filter/facet key)."""
+    return flag.split(":", 1)[0]
+
+
+def is_off_icp(flags):
+    return any(flag_key(f) in OFF_ICP_FLAGS for f in flags)
 
 
 # ----------------------------------------------------------------------------
@@ -541,6 +565,8 @@ class OutreachIndex:
                         "segment": dbm.get("segment") or asset.get("segment") or "",
                         "approved": bool(dbm.get("approved_at")),
                         "edited": bool(asset.get("edited_at")),
+                        "country": dbm.get("country") or "",
+                        "flags": parse_import_flags(dbm.get("import_flags")),
                     })
                     seg = rows[-1]["segment"]
                     rows[-1]["segment_label"] = SEGMENT_LABELS.get(seg, seg) if seg else ""
@@ -578,6 +604,8 @@ class OutreachIndex:
         q = get("q").lower()
         group_by = get("group_by")
         approved = get("approved")  # review filter: "yes" / "no" over gated rows
+        # lead-quality filter: "off_icp" | "any" | "none" | a flag key
+        flag = get("flag")
         sort = get("sort")
         sdir = get("dir")
 
@@ -592,6 +620,19 @@ class OutreachIndex:
                 return False
             if approved == "no" and (r.get("approved") or not r.get("gated")):
                 return False
+            if flag:
+                fl = r.get("flags") or []
+                if flag == "off_icp":
+                    if not is_off_icp(fl):
+                        return False
+                elif flag == "any":
+                    if not fl:
+                        return False
+                elif flag == "none":
+                    if fl:
+                        return False
+                elif flag not in {flag_key(f) for f in fl}:
+                    return False
             if cta and r["cta_type"] != cta:
                 return False
             if company and company not in r["company"].lower():
@@ -622,6 +663,16 @@ class OutreachIndex:
             "status": facet("status"),
             "segment": facet("segment"),
         }
+        # flags facet: per flag key, plus the off-ICP rollup (a row counts once
+        # per key; a row can carry several flags)
+        flag_counts = {"off_icp": 0}
+        for r in rows:
+            fl = r.get("flags") or []
+            if is_off_icp(fl):
+                flag_counts["off_icp"] += 1
+            for k in {flag_key(f) for f in fl}:
+                flag_counts[k] = flag_counts.get(k, 0) + 1
+        facets["flags"] = flag_counts
 
         # Explicit column sort (before pagination — the list is server-paged).
         # "segment" sorts by the display label; blanks always sink to the end.
@@ -637,7 +688,14 @@ class OutreachIndex:
                        "cta_type": "cta_type", "status": "status",
                        "segment": "segment_label", "signal": "signal"}
         sf = sort_fields.get(sort)
-        sort_val = (lambda r: r.get(sf) or "") if sf else (approval_state if sort == "approval" else None)
+        if sf:
+            sort_val = lambda r: r.get(sf) or ""  # noqa: E731
+        elif sort == "approval":
+            sort_val = approval_state
+        elif sort == "flags":
+            sort_val = lambda r: " ".join(r.get("flags") or [])  # noqa: E731
+        else:
+            sort_val = None
         if sort_val:
             filtered = sorted(filtered, key=lambda r: sort_val(r).lower(),
                               reverse=(sdir == "desc"))
@@ -1784,6 +1842,8 @@ def _enrich_enroll_rows(rows):
             row["company"] = m["company"]
             row["signal"] = m["signal"]
             row["cta_type"] = m["cta_type"]
+            row["country"] = m.get("country", "")
+            row["flags"] = m.get("flags") or []
     return rows
 
 
@@ -4648,6 +4708,27 @@ def do_approve_outreach(contact_ids=None, approve_all=False):
     return {"ok": True, "approved": approved, "review": review}, 200
 
 
+def do_unapprove_outreach(contact_ids=None):
+    """Clear approved_at on gated generated contacts (undo stage 6) so the next
+    enrollment skips them. Returns (payload, status)."""
+    if not contact_ids:
+        return {"ok": False, "error": "pass contact_ids"}, 400
+    bdb = _bdb()
+
+    def _run():
+        conn = bdb.connect()
+        try:
+            bdb.init_schema(conn)
+            n = bdb.unapprove_outreach(conn, contact_ids)
+            return n, bdb.review_counts(conn)
+        finally:
+            conn.close()
+
+    unapproved, review = bdb.retry_locked(_run)
+    INDEX.build()
+    return {"ok": True, "unapproved": unapproved, "review": review}, 200
+
+
 def do_requeue_failed_enrollments():
     """Re-arm contacts whose live enroll failed at Bison (HTTP / attach errors)."""
     bdb = _bdb()
@@ -5237,6 +5318,10 @@ class Handler(BaseHTTPRequestHandler):
                 body = self._read_body()
                 payload, code = do_approve_outreach(
                     contact_ids=body.get("contact_ids"), approve_all=bool(body.get("all")))
+                return self._json(payload, code)
+            if path == "/api/outreach/unapprove":
+                body = self._read_body()
+                payload, code = do_unapprove_outreach(contact_ids=body.get("contact_ids"))
                 return self._json(payload, code)
             if path == "/api/instructions/save":
                 body = self._read_body()

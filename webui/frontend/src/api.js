@@ -99,6 +99,7 @@ export const api = {
   suppressionRemove: (id) => post('/api/suppression/remove', { id }),
   updateOutreach: (id, body) => post('/api/outreach/' + encodeURIComponent(id) + '/update', body),
   approveOutreach: (body) => post('/api/outreach/approve', body),
+  unapproveOutreach: (body) => post('/api/outreach/unapprove', body),
   ingest: (listId) => post('/api/ingest', { list_id: listId }),
   reindex: () => post('/api/reindex'),
   progress: () => get('/api/progress'),

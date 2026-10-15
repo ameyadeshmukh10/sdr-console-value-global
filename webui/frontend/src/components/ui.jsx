@@ -25,6 +25,43 @@ export function Stat({ label, value, sub, accent = false, tone }) {
   )
 }
 
+// Import-time lead-quality flags (csv_audience.lead_flags). OFF_ICP_FLAGS
+// mirrors the server's OFF_ICP_FLAGS: outside US/CA, <1,000 employees,
+// healthcare — shown amber; the rest are informational (muted).
+export const OFF_ICP_FLAGS = ['non_us_ca', 'country_inferred', 'below_icp_floor', 'healthcare']
+export const FLAG_LABELS = {
+  non_us_ca: 'outside US/CA',
+  country_inferred: 'non-US/CA domain',
+  below_icp_floor: '<1,000 employees',
+  healthcare: 'healthcare',
+  country_unknown: 'no country',
+  no_linkedin: 'no LinkedIn',
+}
+
+export function flagLabel(flag) {
+  const [key, extra] = flag.split(':')
+  if (key === 'country_inferred' && extra) return `likely ${extra.toUpperCase()} (domain)`
+  return FLAG_LABELS[key] || key.replace(/_/g, ' ')
+}
+
+export function FlagChips({ flags, country }) {
+  if (!flags || !flags.length) return <span className="muted">—</span>
+  return (
+    <span className="row" style={{ gap: 4, flexWrap: 'wrap' }}>
+      {flags.map((f) => {
+        const off = OFF_ICP_FLAGS.includes(f.split(':')[0])
+        const label = f === 'non_us_ca' && country ? `${country}` : flagLabel(f)
+        return (
+          <span key={f} className="badge" title={f === 'non_us_ca' ? 'outside US/Canada' : 'import-time quality flag'}
+            style={{ fontSize: 10, ...(off ? { color: 'var(--amber)', borderColor: 'var(--amber)' } : { color: 'var(--muted)' }) }}>
+            {label}
+          </span>
+        )
+      })}
+    </span>
+  )
+}
+
 export function ErrorBanner({ error }) {
   if (!error) return null
   return <div className="banner error">{String(error)}</div>
