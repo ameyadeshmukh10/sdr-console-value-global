@@ -5,16 +5,15 @@ SHELL:=/bin/bash
 
 SCRIPTS = ./.claude/skills/sdr-pipeline/scripts
 PORT ?= 8787
-# No pyproject here — deps come from requirements.txt into a local uv venv
-PY = ./.venv/bin/python
+# Python deps live in pyproject.toml/uv.lock; `uv run` uses the synced ./.venv
+PY = uv run python
 
-# Default target: build the SPA after the checks pass
+# Default target: compile + offline self-tests (no SPA build)
 default: check
 
 init:
-	@echo "🏁 python (uv venv + requirements.txt) ..."
-	uv venv --allow-existing
-	uv pip install -r requirements.txt
+	@echo "🏁 python (uv) ..."
+	uv sync
 	@echo "🏁 frontend ..."
 	cd ./webui/frontend/ && npm ci
 	@echo "🏁 deck-renderer ..."
@@ -58,8 +57,8 @@ run_cli:
 
 help:
 	@echo "Available commands:"
-	@echo "  make              - Runs the default 'build' target (check + SPA build)."
-	@echo "  make init         - uv venv + requirements.txt, npm ci (frontend, deck-renderer)."
+	@echo "  make              - Runs the default 'check' target (compile + self-tests)."
+	@echo "  make init         - uv sync + npm ci (frontend, deck-renderer)."
 	@echo "  make check        - py_compile + offline self-tests."
 	@echo "  make lint         - ruff check (informational, not gating)."
 	@echo "  make run          - Runs the console on :$(PORT)."

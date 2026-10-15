@@ -211,7 +211,8 @@ export default function AnalyticsPage() {
                   <XAxis dataKey="name" tick={{ fill: BRAND.muted, fontSize: 11 }} interval={0} angle={-18} textAnchor="end" height={60} />
                   <YAxis tick={{ fill: BRAND.muted, fontSize: 11 }} unit="%" />
                   <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: 'rgba(15,28,24,0.04)' }} />
-                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  {/* Recharts 3 sorts legend items alphabetically; keep the bar order. */}
+                  <Legend wrapperStyle={{ fontSize: 12 }} itemSorter={(it) => (it.dataKey === 'Reply %' ? 0 : 1)} />
                   <Bar dataKey="Reply %" fill={BRAND.jade} radius={[3, 3, 0, 0]} />
                   <Bar dataKey="Interested %" fill={BRAND.mint} radius={[3, 3, 0, 0]} />
                 </BarChart>

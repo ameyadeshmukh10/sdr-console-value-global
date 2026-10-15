@@ -41,7 +41,7 @@ HeyReach (LinkedIn, deferred).
   the JSON API and the built React SPA via `ThreadingHTTPServer`. Routing is a manual
   `if path == "/api/...":` dispatch in `do_GET` / `do_POST`. Every `/api/*` route is
   auth-gated (Bearer token from `/api/login`) unless listed in `_EXEMPT_GET`/`_EXEMPT_POST`.
-- **Backend deps:** stdlib only, EXCEPT `requirements.txt` (`pymongo` for the attribution
+- **Backend deps:** stdlib only, EXCEPT `pyproject.toml`/`uv.lock` (uv-managed; `pymongo` for the attribution
   store, `dnspython` for technographic detection). Anything importing either must do it
   lazily (see `mongo_store.py`, `tech_signals.py`) so the server still boots without them.
 - **Frontend:** React 18 + Vite 5 + Recharts in `webui/frontend/`. API wrappers live in

@@ -137,9 +137,9 @@ def tech_available():
         return _AVAILABLE
     _ensure_path()
     try:
-        import dns.resolver  # noqa: F401  (dnspython — requirements.txt)
+        import dns.resolver  # noqa: F401  (dnspython — pyproject.toml)
     except Exception as exc:  # noqa: BLE001
-        _AVAILABLE = (False, f"dnspython not installed ({exc.__class__.__name__}) — pip install -r requirements.txt")
+        _AVAILABLE = (False, f"dnspython not installed ({exc.__class__.__name__}) — run `uv sync`")
         return _AVAILABLE
     _AVAILABLE = (True, "")
     return _AVAILABLE

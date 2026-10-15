@@ -46,7 +46,7 @@ def get_db():
     try:
         from pymongo import MongoClient
     except ImportError as e:
-        raise RuntimeError("pymongo is not installed (pip install -r requirements.txt)") from e
+        raise RuntimeError("pymongo is not installed (run `uv sync`)") from e
     # 5s server selection keeps a misconfigured URL from hanging request threads.
     client = MongoClient(url, serverSelectionTimeoutMS=5000, appname="sdr-console-aisdr")
     return client[os.environ.get("AISDR_MONGO_DB", "aisdr")]

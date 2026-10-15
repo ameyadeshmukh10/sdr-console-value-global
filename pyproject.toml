@@ -1,0 +1,26 @@
+[project]
+name = "sdr-console-value-global"
+version = "0.1.0"
+description = "Value Global ERP Data Retirement SDR — outbound pipeline + web console"
+readme = "README.md"
+requires-python = ">=3.12"
+# The backend is otherwise stdlib-only. Both deps below must only ever be imported
+# LAZILY — the server boots (and everything else works) without them.
+dependencies = [
+    # AI SDR deal-attribution store (Railway MongoDB service, MONGO_URL).
+    "pymongo==4.19.0",
+    # Technographic detection DNS collector (vendored technographics/ package, driven by
+    # .claude/skills/sdr-pipeline/scripts/tech_signals.py).
+    "dnspython==2.9.0",
+]
+
+[tool.uv]
+# Not an installable package — uv only manages the dependency environment.
+package = false
+
+[tool.ruff.lint]
+extend-ignore = [
+    # Blind `except Exception` is deliberate here: read payloads must degrade gracefully
+    # (never 500) and best-effort write-backs/daemon loops must never crash the server.
+    "BLE001",
+]
