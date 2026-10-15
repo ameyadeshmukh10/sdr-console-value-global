@@ -126,30 +126,29 @@ export default function AnalyticsPage() {
           the email block so it works regardless of email-stats state. */}
       <div className="section-h" style={{ marginBottom: 8 }}>AI SDR pipeline</div>
       {syncMsg && <div className="banner info">{syncMsg}</div>}
+      {/* Unconfigured = no HubSpot or no MongoDB: nothing to attribute, so no tiles. */}
+      {aisdr?.configured === false ? (
+        <div className="banner info" style={{ marginBottom: 24 }}>Deal attribution not configured.</div>
+      ) : (
       <div className="grid stat-grid" style={{ marginBottom: 24 }}>
         <Stat
           accent
           label="Deals created by AI SDR"
-          value={aisdr?.configured === false || aisdr?.error ? '—' : num(aisdr?.deals_created)}
-          sub={aisdr?.configured === false
-            ? 'Set MONGO_URL to enable deal attribution'
-            : aisdr?.error
-              ? `Attribution store unreachable: ${aisdr.error}`
-              : null}
+          value={aisdr?.error ? '—' : num(aisdr?.deals_created)}
+          sub={aisdr?.error ? `Attribution store unreachable: ${aisdr.error}` : null}
         />
         <Stat
           accent
           label="Total pipeline"
-          value={aisdr?.configured === false || aisdr?.error ? '—' : usd(aisdr?.total_pipeline)}
-          sub={aisdr?.configured === false
-            ? 'HubSpot deal attribution not configured'
-            : aisdr?.last_error
-              ? `Last sync error: ${aisdr.last_error}`
-              : aisdr?.last_sync_at
-                ? `Synced ${new Date(aisdr.last_sync_at).toLocaleString()}`
-                : 'No sync has run yet — click Refresh'}
+          value={aisdr?.error ? '—' : usd(aisdr?.total_pipeline)}
+          sub={aisdr?.last_error
+            ? `Last sync error: ${aisdr.last_error}`
+            : aisdr?.last_sync_at
+              ? `Synced ${new Date(aisdr.last_sync_at).toLocaleString()}`
+              : 'No sync has run yet — click Refresh'}
         />
       </div>
+      )}
 
       {/* Email channel */}
       <div className="row" style={{ gap: 8, alignItems: 'center', marginBottom: 10 }}>

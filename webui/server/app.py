@@ -1402,18 +1402,39 @@ def hubspot_activity_status_payload():
 # ----------------------------------------------------------------------------
 _AISDR_SYNC_LOCK = threading.Lock()
 _AISDR_SYNC_STATE = {"started_at": None, "last_result": None}
+_AISDR_LOGGED_MISSING = None  # last logged config state — log on change, not per page load
 
 
 def aisdr_analytics_payload():
     """Aggregates for the Analytics tiles. Never raises: unconfigured -> a
     {"configured": false} hint, unreachable -> {"configured": true, "error": ...}
-    (same degradation contract as linkedin_analytics_payload)."""
-    if not mongo_store.mongo_configured():
+    (same degradation contract as linkedin_analytics_payload). Deals and pipeline
+    are HubSpot deals, so no CRM connected also counts as unconfigured."""
+    if _aisdr_missing():
         return {"configured": False}
     try:
         return mongo_store.aisdr_analytics(mongo_store.get_db())
     except Exception as e:  # noqa: BLE001 — tiles show the error, page keeps working
-        return {"configured": True, "error": f"{type(e).__name__}: {e}"[:200]}
+        err = f"{type(e).__name__}: {e}"[:200]
+        print(f"[aisdr] analytics read failed: {err}", flush=True)
+        return {"configured": True, "error": err}
+
+
+def _aisdr_missing():
+    """Which settings deal attribution still needs ([] = fully configured). Logs to
+    stdout (Railway logs) only when the answer changes, since every Analytics page
+    load asks."""
+    global _AISDR_LOGGED_MISSING
+    missing = [name for name, ok in (
+        ("MONGO_URL", mongo_store.mongo_configured()),
+        ("HUBSPOT_ACCESS_TOKEN", read_env().get("HUBSPOT_ACCESS_TOKEN")),
+    ) if not ok]
+    if missing != _AISDR_LOGGED_MISSING:
+        _AISDR_LOGGED_MISSING = missing
+        print("[aisdr] deal attribution " + (
+            f"not configured — missing {', '.join(missing)}" if missing else "configured"),
+            flush=True)
+    return missing
 
 
 def aisdr_sync_status_payload():
@@ -1437,6 +1458,10 @@ def do_aisdr_sync(full=False, dry_run=False):
     if not mongo_store.mongo_configured():
         return ({"ok": False, "error": "MONGO_URL is not set — connect the Railway "
                                        "MongoDB service to sdr-console first"}, 400)
+    if not read_env().get("HUBSPOT_ACCESS_TOKEN"):
+        print("[aisdr-sync] refused — HUBSPOT_ACCESS_TOKEN is not set", flush=True)
+        return ({"ok": False, "error": "HubSpot is not connected (HUBSPOT_ACCESS_TOKEN "
+                                       "is not set)"}, 400)
     if not _AISDR_SYNC_LOCK.acquire(blocking=False):
         return ({"ok": False, "error": "a sync is already running",
                  "started_at": _AISDR_SYNC_STATE["started_at"]}, 409)
