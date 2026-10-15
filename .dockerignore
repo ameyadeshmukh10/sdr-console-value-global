@@ -10,7 +10,8 @@
 **/node_modules
 **/dist
 
-# Python caches
+# Python caches + local venv (make init; the image pip-installs its own)
+.venv
 **/__pycache__
 *.pyc
 *.pyo

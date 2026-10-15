@@ -222,6 +222,8 @@ def main():
     # auto-replies, out-of-window, non-lead senders, junk/system senders, infra test mail.
     candidates = []
     filtered = {"automated": 0, "non_lead": 0, "junk_sender": 0, "skip_subject": 0}
+    # Out of scope rather than filtered — reported so an empty queue can say why.
+    out_of_window = 0
     for reply in bison.list_replies(folder="inbox"):
         if len(candidates) >= args.max:
             break
@@ -235,6 +237,7 @@ def main():
             try:
                 when = datetime.fromisoformat(dr.replace("Z", "+00:00"))
                 if when < cutoff:
+                    out_of_window += 1
                     continue
             except ValueError:
                 pass
@@ -318,6 +321,7 @@ def main():
                    "already": sum(1 for it in items if it["already_interested"]),
                    "unsubscribed": len(unsub), "filtered": sum(filtered.values())},
         "filtered": filtered,
+        "out_of_window": out_of_window,
         "unsubscribed": {"applied": args.apply_unsubscribes, "items": unsub_done,
                          "errors": unsub_errors},
         "items": items,

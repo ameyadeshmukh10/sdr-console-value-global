@@ -1402,18 +1402,39 @@ def hubspot_activity_status_payload():
 # ----------------------------------------------------------------------------
 _AISDR_SYNC_LOCK = threading.Lock()
 _AISDR_SYNC_STATE = {"started_at": None, "last_result": None}
+_AISDR_LOGGED_MISSING = None  # last logged config state — log on change, not per page load
 
 
 def aisdr_analytics_payload():
     """Aggregates for the Analytics tiles. Never raises: unconfigured -> a
     {"configured": false} hint, unreachable -> {"configured": true, "error": ...}
-    (same degradation contract as linkedin_analytics_payload)."""
-    if not mongo_store.mongo_configured():
+    (same degradation contract as linkedin_analytics_payload). Deals and pipeline
+    are HubSpot deals, so no CRM connected also counts as unconfigured."""
+    if _aisdr_missing():
         return {"configured": False}
     try:
         return mongo_store.aisdr_analytics(mongo_store.get_db())
     except Exception as e:  # noqa: BLE001 — tiles show the error, page keeps working
-        return {"configured": True, "error": f"{type(e).__name__}: {e}"[:200]}
+        err = f"{type(e).__name__}: {e}"[:200]
+        print(f"[aisdr] analytics read failed: {err}", flush=True)
+        return {"configured": True, "error": err}
+
+
+def _aisdr_missing():
+    """Which settings deal attribution still needs ([] = fully configured). Logs to
+    stdout (Railway logs) only when the answer changes, since every Analytics page
+    load asks."""
+    global _AISDR_LOGGED_MISSING
+    missing = [name for name, ok in (
+        ("MONGO_URL", mongo_store.mongo_configured()),
+        ("HUBSPOT_ACCESS_TOKEN", read_env().get("HUBSPOT_ACCESS_TOKEN")),
+    ) if not ok]
+    if missing != _AISDR_LOGGED_MISSING:
+        _AISDR_LOGGED_MISSING = missing
+        print("[aisdr] deal attribution " + (
+            f"not configured — missing {', '.join(missing)}" if missing else "configured"),
+            flush=True)
+    return missing
 
 
 def aisdr_sync_status_payload():
@@ -1437,6 +1458,10 @@ def do_aisdr_sync(full=False, dry_run=False):
     if not mongo_store.mongo_configured():
         return ({"ok": False, "error": "MONGO_URL is not set — connect the Railway "
                                        "MongoDB service to sdr-console first"}, 400)
+    if not read_env().get("HUBSPOT_ACCESS_TOKEN"):
+        print("[aisdr-sync] refused — HUBSPOT_ACCESS_TOKEN is not set", flush=True)
+        return ({"ok": False, "error": "HubSpot is not connected (HUBSPOT_ACCESS_TOKEN "
+                                       "is not set)"}, 400)
     if not _AISDR_SYNC_LOCK.acquire(blocking=False):
         return ({"ok": False, "error": "a sync is already running",
                  "started_at": _AISDR_SYNC_STATE["started_at"]}, 409)
@@ -2946,6 +2971,18 @@ def _attach_threads(items):
     return items
 
 
+def replies_campaigns():
+    """Campaigns for the Replies view's filter: the configured BISON_CAMPAIGN_ID,
+    named from the cached Analytics snapshot (no live Bison call). One entry for
+    now — multi-campaign support will extend this list."""
+    cid = default_campaign_id()
+    if cid is None:
+        return []
+    names = {str(c.get("campaign_id")): c.get("campaign_name")
+             for c in read_jsonl(CAMPAIGN_STATS / "campaigns.jsonl")}
+    return [{"id": cid, "name": names.get(str(cid)) or f"Campaign #{cid}"}]
+
+
 def review_queue_payload():
     """Unified review queue: email (Bison) + LinkedIn (HeyReach) replies in one
     list, each item carrying a `channel`. Counts are summed across channels.
@@ -2954,7 +2991,7 @@ def review_queue_payload():
     email = _read_json(REVIEW_QUEUE) or {}
     li = _read_json(LI_REVIEW_QUEUE) or {}
     if not email and not li:
-        return {"available": False, "items": []}
+        return {"available": False, "items": [], "campaigns": replies_campaigns()}
     for it in (email.get("items") or []):
         it.setdefault("channel", "email")
     items = list(email.get("items") or []) + list(li.get("items") or [])
@@ -2995,12 +3032,17 @@ def review_queue_payload():
         "dismissed": len(dismissed),
         "email_scanned": ec.get("scanned") or 0,
         "linkedin_scanned": lc.get("scanned") or 0,
+        "out_of_window": email.get("out_of_window") or 0,
     }
     return {
         "available": True,
         "items": active,
         "dismissed": dismissed,
         "counts": counts,
+        # Why email replies never reached the queue (automated / non_lead / …),
+        # so an empty inbox explains itself instead of looking broken.
+        "email_filtered": email.get("filtered") or {},
+        "campaigns": replies_campaigns(),
         "scanned_at": email.get("scanned_at") or li.get("scanned_at"),
         "lookback_days": email.get("lookback_days") or li.get("lookback_days"),
         "linkedin": {"configured": bool(li.get("configured")), "error": li.get("error")},
