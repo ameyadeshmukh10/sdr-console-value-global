@@ -53,7 +53,12 @@ export default function RepliesPage() {
     loadQueue().then((q) => {
       if (autoScanned.current) return
       autoScanned.current = true
-      if (q && isStale(q.scanned_at)) scan()
+      if (!q || !isStale(q.scanned_at)) return
+      // Rescan with the saved window, not this closure's default 14 — a scan
+      // replaces the queue, so a shorter one would drop older actionable replies.
+      const days = Number(q.lookback_days) > 0 ? Number(q.lookback_days) : undefined
+      if (days) setLookback(days)
+      scan(days)
     })
     loadDrafts()
     api.repliesAgents().then((r) => r.agents?.length && setAgents(r.agents)).catch(() => {})
@@ -102,10 +107,11 @@ export default function RepliesPage() {
     move: busy[`move:${id}`],
   })
 
-  async function scan() {
+  // `days` overrides the input for callers whose captured `lookback` may be stale.
+  async function scan(days = lookback) {
     setScanning(true); setError(null); setMsg(null)
     try {
-      const q = await api.scanReplies({ lookback_days: Number(lookback), campaign_id: campaign ? Number(campaign) : null })
+      const q = await api.scanReplies({ lookback_days: Number(days), campaign_id: campaign ? Number(campaign) : null })
       if (q.ok === false) {
         const err = [q.scan, q.li_scan].filter((r) => r && r.returncode !== 0).map((r) => lastLine(r.stderr || r.stdout))
         setMsg({ err: true, text: `Scan returned errors${err.length ? `: ${err.join(' · ')}` : '.'}` })
@@ -272,7 +278,10 @@ export default function RepliesPage() {
   const dropped = Object.entries(queue?.email_filtered || {}).filter(([, n]) => n > 0)
     .map(([k, n]) => `${num(n)} ${FILTER_LABELS[k] || k}`)
   const scanSummary = queue?.available && c ? [
-    `Last scan: ${num(c.email_scanned)} email${c.linkedin_scanned ? ` + ${num(c.linkedin_scanned)} LinkedIn` : ''} replies classified`,
+    // Auto-unsubscribed replies were classified too, but the script keeps them out
+    // of the queue (and out of email_scanned), so add them back to the total.
+    `Last scan: ${num((c.email_scanned || 0) + (c.unsubscribed || 0))} email${c.linkedin_scanned ? ` + ${num(c.linkedin_scanned)} LinkedIn` : ''} replies classified`,
+    c.unsubscribed ? `${num(c.unsubscribed)} unsubscribe replies excluded` : null,
     dropped.length ? `filtered out ${dropped.join(', ')}` : null,
     c.out_of_window ? `${num(c.out_of_window)} older than the lookback window` : null,
   ].filter(Boolean).join(' · ') : null
@@ -316,7 +325,7 @@ export default function RepliesPage() {
               {(queue?.campaigns || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </label>
-          <button onClick={scan} disabled={scanning}>
+          <button onClick={() => scan()} disabled={scanning}>
             {scanning ? <Spinner label="Scanning + classifying…" /> : '⟲ Scan inbox'}
           </button>
           {liCount > 0 && (
