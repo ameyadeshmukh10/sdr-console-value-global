@@ -1085,7 +1085,10 @@ def _write_held(contact, segment, signal, route=None, reason=None):
         "held_reason": reason or (route or {}).get("reason") or "held",
         # a bad name is a data fix + regenerate (failed); routing holds are final
         "held_status": "failed" if (reason or "").startswith("name check") else "skipped",
-        "track": (route or {}).get("track"), "route": route, "email": {}, "linkedin": {}})
+        # always the 'hold' track: no copy was written, so reporting must not
+        # count it under the route's track (or as archiving / unrouted); the
+        # route itself stays for the review panel (PR #31 review)
+        "track": "hold", "route": route, "email": {}, "linkedin": {}})
 
 
 def _persist_name_fix(contact, nc):

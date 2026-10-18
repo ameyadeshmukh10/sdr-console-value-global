@@ -420,7 +420,7 @@ application-**retirement** pitch, never the staying-on-EBS archiving pain.
   (`name_check` count; also blocks copy written before a repair). CSV import flags
   `name_check` / `name_fixable` / `title_not_buyer` (the first two + persona flag are in
   `OFF_ICP_FLAGS`).
-- **Holds** write a stub asset (`held`, `held_reason`, `held_status`); `cmd_ingest` records
+- **Holds** write a stub asset (`held`, `held_reason`, `held_status`, always `track: "hold"` — the route stays for review); `cmd_ingest` records
   it as `skipped` (routing/floor/persona) or `failed` (name) and appends `, N held` to its
   one stdout line.
 - **Hygiene (issues 5, 8, 12-15):** `lint_erp(email, route, linkedin)` adds `_hygiene` on
