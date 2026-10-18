@@ -61,7 +61,6 @@ DB_PATH = DATA / "outreach" / "pipeline.db"
 GEN_DIR = DATA / "outreach" / "generated"
 CONTACTS_JSONL = DATA / "outreach" / "contacts.jsonl"
 CAMPAIGN_STATS = DATA / "campaign-stats"
-ENV_PATH = PROJECT_ROOT / ".env"
 
 SCRIPTS = PROJECT_ROOT / ".claude" / "skills"
 HUBSPOT_PULL = SCRIPTS / "sdr-pipeline" / "scripts" / "hubspot_pull.py"
@@ -174,53 +173,8 @@ def derive_cta(asset):
     return "unknown"
 
 
-# ----------------------------------------------------------------------------
-# Tiny .env reader (no python-dotenv dependency).
-# ----------------------------------------------------------------------------
-def _parse_env_file():
-    """KEY=value pairs from ENV_PATH ({} when absent)."""
-    env = {}
-    if ENV_PATH.is_file():
-        for line in ENV_PATH.read_text().splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, val = line.partition("=")
-            # strip inline comments + surrounding quotes/whitespace
-            val = val.split("#", 1)[0].strip().strip('"').strip("'")
-            env[key.strip()] = val
-    return env
-
-
-# Keys main() copied from ENV_PATH into os.environ (i.e. NOT host-provided).
-_DOTENV_KEYS = set()
-
-
-def load_env_file():
-    """Copy ENV_PATH into os.environ at boot, setdefault-style (real env wins).
-
-    In the Docker image ENV_PATH is the baked-in .env.defaults, so its values must
-    reach the loops that read os.environ directly (AISDR_SYNC_ENABLED, the activity
-    autosyncs, …) and every run_script() subprocess — the per-client lazy loaders
-    only fire when a client is constructed."""
-    import os
-    for key, val in _parse_env_file().items():
-        if key not in os.environ:
-            os.environ[key] = val
-            _DOTENV_KEYS.add(key)
-
-
-def read_env():
-    """Config the web UI reads (campaign IDs, HeyReach config, …). Merges the .env file
-    (local dev; in the Docker image it is the baked-in .env.defaults) with the process
-    environment (Railway service variables). The process environment wins, so
-    host-provided config is always honored, and ENV_PATH may be absent. The file is
-    re-read on every call (scripts rewrite it, e.g. sdr_batches setup-campaigns), so
-    keys load_env_file() copied into os.environ don't shadow later edits."""
-    import os
-    env = _parse_env_file()
-    env.update({k: v for k, v in os.environ.items() if k not in _DOTENV_KEYS})
-    return env
+# .env handling (ENV_PATH, boot loading, settings log, read_env) lives in env_config.
+from env_config import load_env_file, log_settings, read_env  # noqa: E402  (stdlib, no I/O at import)
 
 
 # ----------------------------------------------------------------------------
@@ -5736,6 +5690,7 @@ def _aisdr_sync_loop():
 def main():
     import os
     load_env_file()  # before any loop/env read — see load_env_file()
+    log_settings()
     # $PORT is injected by hosting platforms (Railway); --port overrides for local runs.
     port = int(os.environ.get("PORT", "8787"))
     # Bind localhost for local dev (safe), but all interfaces when a platform sets $PORT
