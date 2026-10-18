@@ -106,7 +106,7 @@ export default function DiagramPage() {
     { id: 'sequencing', title: 'Sequencing & CTA offers', sub: 'icp-email.md · cta-offers.md · live', C: SequencingSection, data: config?.sequencing },
     { id: 'knowledge', title: 'Knowledge base', sub: 'offer.md · live', C: KnowledgeSection, data: config?.knowledge },
     { id: 'guardrails', title: 'Guardrails', sub: 'lint_sequence.py · icp-email.md · live', C: GuardrailsSection, data: config?.guardrails },
-    { id: 'signals', title: 'Signal intelligence', sub: 'technographics + hiring config · live', C: SignalsSection, data: config?.signals },
+    { id: 'signals', title: 'Signal intelligence', sub: 'technographics + hiring + news triggers · live', C: SignalsSection, data: config?.signals },
   ]
   const failedSections = Object.keys(config?.errors || {})
 
