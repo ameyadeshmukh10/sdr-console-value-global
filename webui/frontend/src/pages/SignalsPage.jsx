@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { Stat, Spinner, ErrorBanner, num } from '../components/ui.jsx'
 import { SortTh, useSort } from '../components/sortable.jsx'
 import SignalDetail from '../components/SignalDetail.jsx'
+import { buildSignalReport } from '../components/signalReport.js'
 
 // Signal cache — per-company research reused for 90 days so a company is searched
 // once instead of once per contact / per re-run. Force-refresh re-searches one.
 // Tech = the technographic scan (website + DNS fingerprinting + ERP portal probes) stored alongside:
-// per-row Detect re-scans one company, "Detect missing" backfills the rest.
+// Refresh / Detect act on the checked rows (one domain at a time); "Detect missing" backfills the rest.
 // Hiring = the Prospeo job-postings scan (open roles + sales subset), same cache;
 // single-domain detect lives in the row drawer, "Detect hiring" backfills the rest.
 // News = the ERP-trigger web research (M&A carve-out, ERP migration, license audit,
@@ -20,8 +21,11 @@ const NO_NEWS = 'No ERP news signals detected'
 export default function SignalsPage() {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
-  const [refreshing, setRefreshing] = useState(null)
-  const [detecting, setDetecting] = useState(null)
+  const [selected, setSelected] = useState(() => new Set())
+  // Bulk action over the checked rows: {action, total, done, current, errors, running}.
+  const [selJob, setSelJob] = useState(null)
+  const stopSel = useRef(false)
+  const [exporting, setExporting] = useState(false)
   const [bulkJob, setBulkJob] = useState(null)
   const [hiringJob, setHiringJob] = useState(null)
   const [newsJob, setNewsJob] = useState(null)
@@ -31,25 +35,86 @@ export default function SignalsPage() {
     api.signals().then((d) => { setData(d); setError(null) }).catch((e) => setError(e.message))
   }
   useEffect(() => { load() }, [])
+  // Leaving the page stops a running selected-rows queue after its in-flight call
+  // (otherwise it keeps firing live research/scans with no visible Stop control).
+  useEffect(() => () => { stopSel.current = true }, [])
 
-  async function refresh(domain) {
-    setRefreshing(domain); setError(null)
-    try {
-      const d = await api.refreshSignal(domain)
-      if (d.ok === false) setError(d.error || 'refresh failed')
-      else setData(d)
-    } catch (e) { setError(e.message) }
-    finally { setRefreshing(null) }
+  // Runs the per-domain endpoint over every checked row, sequentially (each call
+  // is a live research/scan — no point hammering the server in parallel). Each
+  // response is the full signals payload, so the table updates as rows land.
+  async function runSelected(action) {
+    const domains = [...selected]
+    if (!domains.length) return
+    const call = action === 'refresh'
+      ? (d) => api.refreshSignal(d)
+      : (d) => api.detectTech(d, true)
+    stopSel.current = false
+    setError(null)
+    let errors = 0, lastErr = null
+    for (let i = 0; i < domains.length; i++) {
+      if (stopSel.current) break
+      setSelJob({ action, total: domains.length, done: i, current: domains[i], errors, running: true })
+      try {
+        const d = await call(domains[i])
+        if (d.ok === false) { errors++; lastErr = `${domains[i]}: ${d.error || `${action} failed`}` }
+        else {
+          setData(d)
+          // A failed tech scan still returns ok:true — the failure rides in detected.tech_error.
+          const scanErr = action === 'detect' && !d.detected?.skipped && d.detected?.tech_error
+          if (scanErr) { errors++; lastErr = `${domains[i]}: ${scanErr}` }
+        }
+      } catch (e) { errors++; lastErr = `${domains[i]}: ${e.message}` }
+      setSelJob((j) => ({ ...j, done: i + 1, errors }))
+    }
+    setSelJob((j) => ({ ...j, current: null, running: false, stopped: stopSel.current }))
+    if (lastErr) setError(lastErr)
   }
 
-  async function detect(domain) {
-    setDetecting(domain); setError(null)
+  // Export: per checked domain, everything the drawer shows (buildSignalReport —
+  // same wording/sections) plus the raw DB row, as one JSON download. Detail reads
+  // are cheap DB queries, fetched a few at a time; a failed read falls back to
+  // the table row so nothing checked is silently dropped.
+  async function exportSelected() {
+    const domains = [...selected]
+    if (!domains.length) return
+    setExporting(true); setError(null)
     try {
-      const d = await api.detectTech(domain, true)
-      if (d.ok === false) setError(d.error || 'tech detect failed')
-      else setData(d)
+      const byDomain = new Map(signals.map((s) => [s.domain, s]))
+      const out = new Array(domains.length)
+      let next = 0
+      async function worker() {
+        while (next < domains.length) {
+          const i = next++
+          const domain = domains[i]
+          try {
+            const d = await api.signalDetail(domain)
+            out[i] = d.ok === false
+              ? { domain, error: d.error, contacts: d.contacts || [], raw: byDomain.get(domain) || null }
+              : buildSignalReport(d)
+          } catch (e) {
+            out[i] = { domain, error: e.message, contacts: [], raw: byDomain.get(domain) || null }
+          }
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(6, domains.length) }, worker))
+      const payload = { exported_at: new Date().toISOString(), count: out.length, signals: out }
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `signals-${new Date().toISOString().slice(0, 10)}-${out.length}.json`
+      document.body.appendChild(a); a.click(); a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
     } catch (e) { setError(e.message) }
-    finally { setDetecting(null) }
+    finally { setExporting(false) }
+  }
+
+  function toggleOne(domain) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      next.has(domain) ? next.delete(domain) : next.add(domain)
+      return next
+    })
   }
 
   async function startBulk() {
@@ -136,6 +201,12 @@ export default function SignalsPage() {
   const missingNews = signals.filter((s) => s.news_age_days == null).length
   const newsOff = data ? data.news_available === false : false
   const newsRunning = newsJob?.status === 'running'
+  const selRunning = !!selJob?.running
+  const allChecked = sorted.length > 0 && sorted.every((s) => selected.has(s.domain))
+  const someChecked = !allChecked && sorted.some((s) => selected.has(s.domain))
+  function toggleAll() {
+    setSelected(allChecked ? new Set() : new Set(sorted.map((s) => s.domain)))
+  }
 
   return (
     <div>
@@ -144,7 +215,7 @@ export default function SignalsPage() {
 
       <ErrorBanner error={error} />
 
-      <div className="grid stat-grid" style={{ marginBottom: 20 }}>
+      <div className="stat-row" style={{ marginBottom: 20 }}>
         <Stat label="Cached accounts" value={num(data?.count || 0)} />
         <Stat label="Fresh (<90d)" value={num(fresh)} sub="reused, no re-search" />
         <Stat label="ERP trigger found" value={num(withTrigger)} tone="good" />
@@ -206,27 +277,61 @@ export default function SignalsPage() {
       {!data ? <Spinner label="Loading…" /> : signals.length === 0 ? (
         <div className="empty">No cached signals yet. They populate as you generate batches.</div>
       ) : (
+        <>
+        {(selected.size > 0 || selJob) && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
+            {selected.size > 0 && (
+              <>
+                <span style={{ fontSize: 13, fontWeight: 600 }}>{num(selected.size)} selected</span>
+                <button className="ghost sm" disabled={selRunning} onClick={() => runSelected('refresh')}
+                  title="Re-research the signal for each checked company">↻ Refresh</button>
+                <button className="ghost sm" disabled={selRunning || techOff} onClick={() => runSelected('detect')}
+                  title={techOff ? (data?.tech_reason || 'detection unavailable') : 'Re-scan website + DNS for each checked company'}>⌁ Detect</button>
+                <button className="ghost sm" disabled={exporting} onClick={exportSelected}
+                  title="Download the full signal record of each checked company as JSON">
+                  {exporting ? <Spinner /> : '⤓ Export'}
+                </button>
+                {!selRunning && <button className="ghost sm" onClick={() => setSelected(new Set())}>Clear</button>}
+              </>
+            )}
+            {selJob && (
+              <span className="muted" style={{ fontSize: 13 }}>
+                {selRunning
+                  ? <><Spinner /> {selJob.action === 'refresh' ? 'Refreshing' : 'Detecting'}… {selJob.done}/{selJob.total}{selJob.current ? ` (${selJob.current})` : ''}{selJob.errors ? ` · ${selJob.errors} errors` : ''}</>
+                  : <>{selJob.action === 'refresh' ? 'Refresh' : 'Detect'} {selJob.stopped ? 'stopped' : 'done'}: {selJob.done}/{selJob.total}{selJob.errors ? `, ${selJob.errors} errors` : ''}</>}
+              </span>
+            )}
+            {selRunning && <button className="ghost sm" onClick={() => { stopSel.current = true }}>Stop</button>}
+          </div>
+        )}
         <div className="panel" style={{ padding: 0, overflowX: 'auto' }}>
-          {/* table-layout:fixed makes these 9 widths (summing to 100%) authoritative,
-              so the actions column keeps room for both buttons and the long
+          {/* table-layout:fixed makes these widths authoritative, so the long
               signal/tech/hiring/news text truncates instead of blowing the table
-              wide. minWidth floors it so buttons never clip; the panel scrolls on
-              a narrow window. */}
-          <table className="dense" style={{ tableLayout: 'fixed', width: '100%', minWidth: 1220 }}>
+              wide. The table fits the viewport; minWidth only floors it on very
+              narrow windows, where the panel (not the page) scrolls. */}
+          <table className="dense" style={{ tableLayout: 'fixed', width: '100%', minWidth: 860 }}>
             <thead><tr>
-              <SortTh label="Domain" k="domain" sort={sort} onSort={toggleSort} width="12%" />
-              <SortTh label="Company" k="company_name" sort={sort} onSort={toggleSort} width="9%" />
+              <th style={{ width: 36 }} onClick={(e) => e.stopPropagation()}>
+                <input type="checkbox" style={{ width: 'auto' }} checked={allChecked}
+                  ref={(el) => { if (el) el.indeterminate = someChecked }}
+                  onChange={toggleAll} aria-label="Select all" />
+              </th>
+              <SortTh label="Domain" k="domain" sort={sort} onSort={toggleSort} width="13%" />
+              <SortTh label="Company" k="company_name" sort={sort} onSort={toggleSort} width="11%" />
               <SortTh label="Trigger" k="trigger_label" sort={sort} onSort={toggleSort} width="8%" />
               <SortTh label="Signal" k="signal" sort={sort} onSort={toggleSort} width="13%" />
-              <SortTh label="Tech" k="tech_signals" sort={sort} onSort={toggleSort} width="11%" />
-              <SortTh label="Hiring" k="hiring_signals" sort={sort} onSort={toggleSort} width="12%" />
-              <SortTh label="News" k="news_signals" sort={sort} onSort={toggleSort} width="14%" />
-              <SortTh label="Age" k="age_days" sort={sort} onSort={toggleSort} width="6%" />
-              <th style={{ width: '15%' }}></th>
+              <SortTh label="Tech" k="tech_signals" sort={sort} onSort={toggleSort} width="12%" />
+              <SortTh label="Hiring" k="hiring_signals" sort={sort} onSort={toggleSort} width="10%" />
+              <SortTh label="News" k="news_signals" sort={sort} onSort={toggleSort} width="15%" />
+              <SortTh label="Age" k="age_days" sort={sort} onSort={toggleSort} width="5%" />
             </tr></thead>
             <tbody>
               {sorted.map((s) => (
                 <tr key={s.domain} className="clickable" onClick={() => setOpenDomain(s.domain)}>
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <input type="checkbox" style={{ width: 'auto' }} checked={selected.has(s.domain)}
+                      onChange={() => toggleOne(s.domain)} aria-label={`Select ${s.domain}`} />
+                  </td>
                   <td className="mono">
                     <span title={s.domain} style={{ display: 'inline-block', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom' }}>{s.domain}</span>
                   </td>
@@ -296,20 +401,12 @@ export default function SignalsPage() {
                       {s.age_days == null ? '—' : `${s.age_days}d`}
                     </span>
                   </td>
-                  <td style={{ whiteSpace: 'nowrap' }} onClick={(e) => e.stopPropagation()}>
-                    <button className="ghost sm" disabled={refreshing === s.domain} onClick={() => refresh(s.domain)}>
-                      {refreshing === s.domain ? <Spinner /> : '↻ Refresh'}
-                    </button>{' '}
-                    <button className="ghost sm" disabled={techOff || detecting === s.domain} onClick={() => detect(s.domain)}
-                      title={techOff ? (data?.tech_reason || 'detection unavailable') : 'Re-scan this company’s website + DNS'}>
-                      {detecting === s.domain ? <Spinner /> : '⌁ Detect'}
-                    </button>
-                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       {openDomain && (
