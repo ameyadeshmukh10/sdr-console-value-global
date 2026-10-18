@@ -485,26 +485,48 @@ def upsert_signal(conn, domain, company_name, signal, has_recent, model=None):
     conn.commit()
 
 
-def upsert_composite_signal(conn, domain, signal, model=None, has_recent=True):
+_UNSET = object()
+
+
+def upsert_composite_signal(conn, domain, signal, model=None, has_recent=True,
+                            expect_signal=_UNSET):
     """Store the news-composite signal WITHOUT clobbering fresher research.
     Unlike upsert_signal (the batch-generation writer, which deliberately
     overwrites with its own verified research), this writes signal/has_recent/
     researched_at/model ONLY when the row has no fresh signal — an existing
     generation-researched signal inside its 90-day window always wins — and it
-    NEVER touches company_name. Returns True when the write happened."""
-    row = get_signal(conn, domain)
-    if row and (row.get("signal") or "").strip() and signal_fresh(row):
-        return False
-    conn.execute("""
-        INSERT INTO account_signals (domain, signal, has_recent, researched_at, model, updated_at)
-        VALUES (?,?,?,?,?,?)
-        ON CONFLICT(domain) DO UPDATE SET
-          signal=excluded.signal, has_recent=excluded.has_recent,
-          researched_at=excluded.researched_at, model=excluded.model,
-          updated_at=excluded.updated_at
-    """, (domain, signal, 1 if has_recent else 0, now(), model, now()))
-    conn.commit()
-    return True
+    NEVER touches company_name.
+
+    `expect_signal` (the caller's snapshot of the signal column, taken BEFORE
+    the compose API call) replaces the freshness check with compare-and-swap:
+    write only if the row STILL holds exactly that value. Used by the UI
+    Refresh and --recompose --replace-generic, so research saved while the
+    composite was being written is never overwritten. The check and the write
+    share one BEGIN IMMEDIATE transaction. Returns True when the write happened."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = get_signal(conn, domain)
+        current = (row or {}).get("signal")
+        if expect_signal is not _UNSET:
+            ok = (current or None) == (expect_signal or None)  # '' and NULL are one "empty"
+        else:
+            ok = not (row and (current or "").strip() and signal_fresh(row))
+        if not ok:
+            conn.rollback()
+            return False
+        conn.execute("""
+            INSERT INTO account_signals (domain, signal, has_recent, researched_at, model, updated_at)
+            VALUES (?,?,?,?,?,?)
+            ON CONFLICT(domain) DO UPDATE SET
+              signal=excluded.signal, has_recent=excluded.has_recent,
+              researched_at=excluded.researched_at, model=excluded.model,
+              updated_at=excluded.updated_at
+        """, (domain, signal, 1 if has_recent else 0, now(), model, now()))
+        conn.commit()
+        return True
+    except BaseException:
+        conn.rollback()
+        raise
 
 
 def update_news_verdicts(conn, domain, news_signals, news_detail):

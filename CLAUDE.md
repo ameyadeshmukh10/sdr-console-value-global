@@ -298,7 +298,12 @@ triggers, via the Anthropic Messages API + server-side `web_search` (the same ch
   research prose, never SDR meta-commentary; the erp-trigger path is unaffected.
   Failures/empty outputs are stderr-logged and recorded in `news_detail.composite`
   ({ok, stored, error}); a max_tokens-truncated output is never stored;
-  `NEWS_COMPOSITE_SIGNAL=0` kills it. Both prompts anchor today's date (UTC — matches
+  `NEWS_COMPOSITE_SIGNAL=0` kills it. **UI Refresh on a found-trigger account
+  re-composes** (`recompose_domain`, overwrite via compare-and-swap on the
+  pre-compose snapshot, no web search) instead of the
+  research-only refresh, whose generic "company anchor -" line once clobbered a
+  trigger composite (2026-10); a compose failure keeps the old signal. Repair any
+  clobbered rows with `--recompose --replace-generic [--dry-run]`. Both prompts anchor today's date (UTC — matches
   the stored clocks) and forbid adopting a stale source's tense (a past "projected
   go-live" is a completed event — the 2026-09 date-reasoning fix).
 - **Verdict guards (`_apply_verdict_guards`):** deterministic backstops after
