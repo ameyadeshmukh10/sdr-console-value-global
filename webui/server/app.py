@@ -600,7 +600,11 @@ class OutreachIndex:
                 return False
             if approved == "yes" and not r.get("approved"):
                 return False
-            if approved == "no" and (r.get("approved") or not r.get("gated")):
+            # "Awaiting approval" = what the Approval column calls awaiting and the
+            # UI can approve: gated, unapproved, copy generated (failed / pending /
+            # skipped contacts have nothing to approve — filter them by Status)
+            if approved == "no" and (r.get("approved") or not r.get("gated")
+                                     or r.get("status") != "generated"):
                 return False
             if flag:
                 fl = r.get("flags") or []
