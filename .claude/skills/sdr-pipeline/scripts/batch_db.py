@@ -210,6 +210,10 @@ def init_schema(conn):
         conn.execute("ALTER TABLE contacts ADD COLUMN domain TEXT")
     if "variant" not in cols:
         conn.execute("ALTER TABLE contacts ADD COLUMN variant TEXT")
+    # messaging track of the latest generation (retirement / data_split /
+    # archiving / hold) — copied from the asset at ingest; reporting dimension
+    if "track" not in cols:
+        conn.execute("ALTER TABLE contacts ADD COLUMN track TEXT")
     # approval-flow columns (additive; pre-gate rows read as gated=0 = autonomous)
     if "gated" not in cols:
         conn.execute("ALTER TABLE contacts ADD COLUMN gated INTEGER DEFAULT 0")

@@ -136,6 +136,8 @@ export default function OutreachDetail({ id, onClose, onChanged }) {
               </div>
             )}
 
+            {(d.route || d.held_reason) && <RoutingPanel route={d.route} heldReason={d.held_reason} />}
+
             <div className="section-h">Signal</div>
             <div className="touch"><div className="body">{d.signal}</div></div>
             {d.account_signal?.signal && d.account_signal.signal !== d.signal && (
@@ -200,6 +202,47 @@ export default function OutreachDetail({ id, onClose, onChanged }) {
             ))}
           </>
         )}
+      </div>
+    </>
+  )
+}
+
+// Feedback 7.4: the routing decision behind this contact's copy, so the client
+// can review it per account (generate_batch.erp_route; held_reason when a gate
+// stopped generation).
+const TRACK_LABELS = { retirement: 'Retirement', data_split: 'Data split, then retire', archiving: 'Archiving', hold: 'Held' }
+const SIDE_LABELS = {
+  acquirer: 'Acquirer', acquired: 'Being acquired', seller: 'Seller (divesting)',
+  divested_entity: 'Divested entity', carveout_buyer: 'Carve-out buyer', erp_switch: 'ERP switch',
+}
+
+function RoutingPanel({ route, heldReason }) {
+  const r = route || {}
+  const rows = [
+    ['Track', TRACK_LABELS[r.track] || r.track],
+    ['Deal side / situation', SIDE_LABELS[r.side] || r.side],
+    ['Entity', r.entity],
+    ['New ERP', r.target],
+    ['Old system', r.legacy || (r.track ? 'not confirmed (never named in copy)' : '')],
+    ['Licensing claim', r.track ? (r.licensing ? 'allowed' : 'not used') : ''],
+    ['Deal closed', r.closed === true ? 'yes' : r.closed === false ? 'no (agreed / announced)' : ''],
+    ['Basis', r.basis === 'inferred' ? 'inferred from headline wording (older research)' : r.basis],
+  ].filter(([, v]) => v)
+  return (
+    <>
+      <div className="section-h">Routing</div>
+      <div className="touch">
+        {heldReason && (
+          <div className="banner warn" style={{ marginBottom: rows.length ? 8 : 0 }}>{heldReason}</div>
+        )}
+        {rows.length > 0 && (
+          <table className="dense">
+            <tbody>
+              {rows.map(([k, v]) => <tr key={k}><td className="muted" style={{ width: 170 }}>{k}</td><td>{v}</td></tr>)}
+            </tbody>
+          </table>
+        )}
+        {r.reason && <div className="body muted" style={{ marginTop: 6 }}>{r.reason}</div>}
       </div>
     </>
   )

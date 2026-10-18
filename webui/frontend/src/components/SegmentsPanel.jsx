@@ -12,6 +12,8 @@ import SignalDetail from './SignalDetail.jsx'
 // Self-contained: loads /api/segments, polls while intel runs, and hands the
 // parent the generation job id via onGeneration(jobId).
 const POLL_MS = 4000
+// display-only buckets (server HELD_SEGMENTS): no checkbox, no approve button
+const HELD = ['suppressed', 'held_trigger']
 
 const STAGE_LABELS = { tech: 'Tech', hiring: 'Hiring', news: 'ERP news' }
 
@@ -142,7 +144,7 @@ export default function SegmentsPanel({ onChanged, onGeneration }) {
               {sortedSegs.map((s) => (
                 <tr key={s.id}>
                   <td onClick={(e) => e.stopPropagation()}>
-                    {s.id !== 'suppressed' && (
+                    {!HELD.includes(s.id) && (
                       <input type="checkbox" checked={!!selected[s.id]} style={{ width: 'auto' }}
                         onChange={(e) => setSelected((m) => ({ ...m, [s.id]: e.target.checked }))} />
                     )}
@@ -151,6 +153,7 @@ export default function SegmentsPanel({ onChanged, onGeneration }) {
                     <b>{s.label}</b>
                     {s.kind === 'trigger' && <span className="badge cta" style={{ marginLeft: 8 }}>trigger copy</span>}
                     {s.id === 'suppressed' && <span className="badge danger" style={{ marginLeft: 8 }}>do not contact</span>}
+                    {s.id === 'held_trigger' && <span className="badge status-skipped" style={{ marginLeft: 8 }} title="No trigger for these accounts may drive copy: every one scored under the send floor, or the acquired company stays a separate unit. Approve an account individually to send it on the default path.">held</span>}
                   </td>
                   <td>{num(s.accounts.length)}</td>
                   <td className="muted">{num(s.contact_total)}</td>
@@ -160,7 +163,7 @@ export default function SegmentsPanel({ onChanged, onGeneration }) {
                     </button>
                   </td>
                   <td>
-                    {s.id !== 'suppressed' && (
+                    {!HELD.includes(s.id) && (
                       <button className="sm" disabled={!!busy} onClick={() => approve({ segments: [s.id] }, s.id)}>
                         {busy === s.id ? <Spinner /> : 'Approve segment'}
                       </button>
@@ -191,8 +194,8 @@ export default function SegmentsPanel({ onChanged, onGeneration }) {
               </button>
             )}
             <button className="ghost" disabled={!!busy} onClick={() => approve({ all: true }, 'all')}
-              title="Approves every awaiting account, researched or not (unresearched ones use the default copy path). Suppressed accounts are always excluded.">
-              {busy === 'all' ? <Spinner /> : `Approve all (${num(Math.max(0, data.accounts - (segs.find((x) => x.id === 'suppressed')?.accounts.length || 0)))} accounts)`}
+              title="Approves every awaiting account, researched or not (unresearched ones use the default copy path). Suppressed and held-trigger accounts are always excluded.">
+              {busy === 'all' ? <Spinner /> : `Approve all (${num(Math.max(0, data.accounts - segs.filter((x) => HELD.includes(x.id)).reduce((n, x) => n + x.accounts.length, 0)))} accounts)`}
             </button>
           </div>
         </>

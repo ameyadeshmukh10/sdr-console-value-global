@@ -348,6 +348,102 @@ triggers, via the Anthropic Messages API + server-side `web_search` (the same ch
   erp-trigger path — but since 2026-09 it DOES reach news research indirectly: a fresh
   composite in `signal` is reused as its cached research (see the composite bullet).
 
+## Signal-to-track routing — retirement vs archiving (added 2026-10)
+
+From Value Global's "Signal Messaging Feedback" (2026-10-09): a company in an
+acquisition, divestiture or ERP switch is STOPPING an old system, so it gets the
+application-**retirement** pitch, never the staying-on-EBS archiving pain.
+
+- **Router:** `generate_batch.erp_route(segment, verdict, tech_line)` (deterministic) →
+  `{track, side, licensing, target, legacy, entity, closed, basis, reason}`, stored on the
+  asset as `route` + `track` and in the signal line (`M&A carve-out [retirement, acquirer]: …`).
+  Tracks: `retirement` (ma_carveout acquirer/acquired; erp_migration), `data_split`
+  (divestiture/spinoff/carve-out: seller, divested_entity, carveout_buyer), `archiving`
+  (license_audit / ebs_oci / ebs_performance — unchanged `ERP_SYSTEM`), `hold`
+  (acquirer whose target stays a separate unit → stub asset `held:true`, ingest marks the
+  contact `skipped` "held: …"). Licensing claim allowed only on retirement when the new
+  ERP is non-Oracle (Fusion or unknown target → no licensing; data_split → none). The old
+  system is named only when confirmed (`details.legacy_erp` or the tech scan).
+- **Research fields** (`news_signals` briefs): ma_carveout adds `prospect_role`,
+  `integration` (consolidate|separate_unit), `closed`; erp_migration adds `legacy_erp` and
+  accepts any new ERP (Workday, Dynamics, …). Verdicts researched before these fields
+  route by `deal_type` + headline regex (`basis:"inferred"`). New guard
+  `hold_separate_unit` downgrades separate-unit acquisitions (also via `--refloor`).
+- **Copy + lint:** `ERP_RETIRE_SYSTEM` (sections 3-5 of the feedback: core idea, the
+  three cleared proofs with exact attribution, touch 1 ends on a question, 20-minute
+  retirement call in touches 2 AND 3, plain breakup, no links/assessment/sample
+  report/white paper). `_lint_retire` enforces it, incl. staying-pain words, any `%`,
+  "clock … announced", licensing when the route forbids it, and any figure beyond the
+  three cleared proofs (`_uncleared_figures`: other $ amounts, TB sizes, report counts,
+  "13 weeks"). The archiving-track prompt no longer offers the uncleared sample report
+  (touch 2 now closes on "Want me to set that up for <Company>?") and `_lint_short`
+  rejects `FORBIDDEN_CTA` on every trigger track. **Every** path (default `lint_email`,
+  archiving `_lint_short`, retirement) rejects `L.UNCONFIRMED_FIGURES` — the InfoCorvus
+  $8.2M / 40-60% / 60-80% / 13 weeks / 12-24 months figures Value Global is still
+  reconciling; remove a pattern there (and restore it in offer.md) once the client
+  confirms it. `lint_assets` passes
+  `asset["route"]`; assets without a route lint exactly as before.
+- **Client samples (feedback section 5):** `RETIRE_EXAMPLES` holds Value Global's sample
+  sequences verbatim (acquirer / data_split / erp_switch; splits and switches reuse the
+  acquirer touches 3-4). `retire_example_block(route)` injects the matching one into the
+  USER prompt as "tone and structure only", with route deltas (acquired side, Fusion =
+  drop the licensing sentence, old system not confirmed Oracle = never say Oracle).
+  `_lint_retire` rejects touches 1-3 sharing a 12-word run with any sample
+  (`_example_overlap`; touch 4's breakup shape is deliberately shared).
+- **Gotcha:** operator play overrides (`erp_plays.json` on the volume) for `ma_carveout` /
+  `erp_migration` still win per field — reset them in the Orchestration view if they hold
+  the old archiving framing.
+
+## Send gates + copy hygiene (feedback section 6, added 2026-10)
+
+- **Send floor (issue 10):** `send_gate.py` (stdlib) — `send_floor(trigger)` =
+  `TRIGGER_SEND_FLOOR_<ID>` → `TRIGGER_SEND_FLOOR` → 60 (ebs_performance 45). Below-floor
+  verdicts are not segment memberships; an account where NO trigger qualifies (all below
+  the floor, or an M&A verdict saying the acquired company stays a separate unit —
+  `send_gate.separate_unit()`, incl. research returned non-found) sits in the held
+  `held_trigger` bucket (`HELD_SEGMENTS`, like `suppressed`) even if it also has a hiring
+  membership: no segment / approve-all approval; an explicit domain is the logged override
+  → default path. Generation re-checks: `erp_gate()` and `_segment_hold()` (a separate-unit
+  verdict holds already-approved contacts instead of falling back to the default path).
+- **Personas (issue 11):** `buyer_group.retirement_buyer(title)` = the client's list (CIO,
+  VP/Director ERP or Enterprise Applications, M&A Integration, Controller/CFO, Enterprise
+  Architect; finance IN, analytics/data-science/people OUT). `erp_gate` requires it on
+  retirement/data_split; archiving trigger copy needs `is_icp_buyer` or it.
+- **Names (issue 9):** `send_gate.name_check(first, last, email, linkedin)` — no word
+  lists. Evidence = a first.last email whose last token matches the last name, or the
+  LinkedIn slug. The CRM name is kept when it agrees (same token, prefix, or same
+  initial: Mike/michael.); otherwise the greeting switches to the evidence name ("Cspa" →
+  "Stewart", also "Bob" → "Robert" — formal, never the wrong person) and `name_gate`
+  persists it (original kept as `import_flags` `name_fixed:<old>`, a "name fixed" badge
+  for the reviewer). Only an unusable name (empty / digits / "@") with no evidence is
+  HELD (`failed`, "name check: …" — fix the contact, then regenerate). Enforced before every generation path and again at `cmd_enroll`
+  (`name_check` count; also blocks copy written before a repair). CSV import flags
+  `name_check` / `name_fixable` / `title_not_buyer` (the first two + persona flag are in
+  `OFF_ICP_FLAGS`).
+- **Holds** write a stub asset (`held`, `held_reason`, `held_status`, always `track: "hold"` — the route stays for review); `cmd_ingest` records
+  it as `skipped` (routing/floor/persona) or `failed` (name) and appends `, N held` to its
+  one stdout line.
+- **Hygiene (issues 5, 8, 12-15):** `lint_erp(email, route, linkedin)` adds `_hygiene` on
+  every trigger track: one consistent first-name greeting, the old dictated stock lines
+  banned (the archiving prompt no longer dictates them), unconfirmed EBS/PeopleSoft/JDE
+  named outside proof sentences (only when the asset has a route), presumptive LinkedIn
+  openers, and retirement vocabulary/licensing/sample-report on LinkedIn. The news +
+  composite prompts forbid naming an unconfirmed ERP and "clock started at announcement".
+
+## Routing review + track reporting (feedback section 7, added 2026-10)
+
+- **Review (7.4):** `outreach_detail` returns `track`, `route`, `held_reason`; the
+  Outreach detail shows a **Routing** panel (track, deal side, entity, new ERP, old
+  system, licensing, closed, basis, reason). Index rows carry `track`.
+- **Reporting (7.5):** `contacts.track` (additive migration) is stamped by `cmd_ingest`
+  from the asset (`archiving` for non-trigger copy). `track_breakdown()` rides on
+  `GET /api/variants` as `tracks` → Trends "By messaging track" (contacts / enrolled /
+  interested). Rows ingested before the column derive `archiving` / `unrouted`.
+  **Booked meetings are NOT recorded locally** (no CRM; `ai_sdr_meeting_booked` lives only
+  in the dormant HubSpot/Mongo attribution), so the split is by interested replies.
+- **Known gap:** regeneration never clears `approved_at` (nor skips `enrolled` contacts) —
+  regenerated gated copy stays enroll-eligible without a fresh review.
+
 ## Agent studio — editable instructions (Orchestration view, added 2026-09)
 
 The Orchestration view is the operator's editing surface for how the AI SDR thinks:

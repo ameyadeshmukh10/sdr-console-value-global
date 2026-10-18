@@ -97,6 +97,11 @@ STATS = re.compile(r"100\+\s?clients|300\+\s?projects|1,?500\+\s?processes|"
 # InfoCorvus published figures must carry the attribution in the same body.
 INFOCORVUS_FIGURES = re.compile(r"\$8\.2\s?M|\$1\s?M\s?(-|to)\s?\$?6\s?M|"
                                 r"40\s?(-|to)\s?60\s?%|60\s?(-|to)\s?80\s?%|13 weeks", re.I)
+# InfoCorvus figures Value Global has NOT confirmed (client feedback 2026-10-09: "we are
+# reconciling two of them now") — blocked on every track until they sign off. Only
+# $1M to $6M (attributed) stays usable. Remove a pattern here once it is confirmed.
+UNCONFIRMED_FIGURES = re.compile(r"\$8\.2\s?M|40\s?(-|to)\s?60\s?%|60\s?(-|to)\s?80\s?%|"
+                                 r"\b13\s?weeks\b|\b12\s?(-|to)\s?24\s?months\b", re.I)
 # The assessment must not appear in touch 1 (field-tested failure).
 ASSESSMENT = re.compile(r"assessment", re.I)
 # Time references that go stale between writing and sending (sequences send days
@@ -216,6 +221,9 @@ def lint_email(step, is_last, is_first=False):
         issues.append("more than two credibility stats in one email (max two)")
     if INFOCORVUS_FIGURES.search(body) and "infocorvus" not in body.lower():
         issues.append("InfoCorvus published figure without the vendor attribution")
+    if UNCONFIRMED_FIGURES.search(body):
+        issues.append(f"unconfirmed InfoCorvus figure '{UNCONFIRMED_FIGURES.search(body).group(0)}' "
+                      "(pending Value Global sign-off; only $1M to $6M is cleared)")
     if FORBIDDEN_CTA.search(body):
         issues.append("banned offer (no pilots; sample report not yet cleared)")
     if PRICING.search(body):

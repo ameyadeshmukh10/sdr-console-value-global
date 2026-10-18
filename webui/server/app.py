@@ -461,7 +461,8 @@ def db_contact_meta():
 # Import-time lead-quality flags (csv_audience.lead_flags) that put a contact
 # outside the program ICP (US/CA, >=1,000 employees, no healthcare). The other
 # flags (no_linkedin, country_unknown) are informational.
-OFF_ICP_FLAGS = ("non_us_ca", "country_inferred", "below_icp_floor", "healthcare")
+OFF_ICP_FLAGS = ("non_us_ca", "country_inferred", "below_icp_floor", "healthcare",
+                 "title_not_buyer", "name_check")
 
 
 def parse_import_flags(raw):
@@ -543,6 +544,7 @@ class OutreachIndex:
                         "batch_id": dbm.get("batch_id"),
                         "gated": bool(dbm.get("gated")),
                         "segment": dbm.get("segment") or asset.get("segment") or "",
+                        "track": asset.get("track") or "",
                         "approved": bool(dbm.get("approved_at")),
                         "edited": bool(asset.get("edited_at")),
                         "country": dbm.get("country") or "",
@@ -793,6 +795,11 @@ def outreach_detail(contact_id):
         "account_signal": account_signal,
         "cta_type": derive_cta(asset),
         "variant": asset.get("variant") or dbm.get("variant") or "",
+        # feedback 7.4: the routing decision (track, deal side, new ERP, old
+        # system, licensing, basis, reason) so the client can review it
+        "track": asset.get("track") or "",
+        "route": asset.get("route") or None,
+        "held_reason": asset.get("held_reason") or "",
         "edited_at": asset.get("edited_at"),
         "email": asset.get("email", {}),
         "linkedin": asset.get("linkedin", {}),
@@ -2415,6 +2422,16 @@ def start_batch_job(limit=None, batch_ids=None, variant="value-give", split=None
 
     knowledge = G.load_knowledge()
     requests, manifest = G.prepare_batch_requests(contacts, knowledge, variant=variant)
+    if not requests:
+        # every contact was held by a send gate (name / floor / persona /
+        # routing) and already has its stub asset: record the holds via the
+        # canonical ingest and finish locally — never submit an empty batch
+        for bid in selected:
+            run_script([str(SDR_BATCHES), "ingest", str(bid)], timeout=300)
+        INDEX.build()
+        return {"ok": True, "job_id": None, "anthropic_batch_id": None, "request_count": 0,
+                "write_only": 0, "held": len(contacts),
+                "note": "every selected contact was held by a send gate; nothing submitted"}, 200
     client = G.AnthropicClient()
     batch = client.create_batch(requests)
 
@@ -4077,8 +4094,12 @@ SEGMENT_LABELS = {
     "ebs_performance": "EBS performance",
     "hiring": "Hiring (sales roles)", "no_signals": "No signals found",
     "suppressed": "Suppressed — do not contact",
+    "held_trigger": "Held — weak or separate-unit trigger",
 }
-SEGMENT_ORDER = ERP_TRIGGER_ORDER + ["hiring", "no_signals", "suppressed"]
+SEGMENT_ORDER = ERP_TRIGGER_ORDER + ["hiring", "no_signals", "held_trigger", "suppressed"]
+# Display buckets: never approvable by segment selection or approve-all; an
+# explicit per-account approval is the logged human override.
+HELD_SEGMENTS = ("suppressed", "held_trigger")
 
 
 def _bdb():
@@ -4189,11 +4210,33 @@ def _account_memberships(sig_row):
         triggers = (json.loads(sig_row.get("news_detail") or "{}") or {}).get("triggers") or {}
     except (ValueError, TypeError):
         triggers = {}
+    held = []  # triggers that may not drive copy: below the send floor / separate unit
     for tid in ERP_TRIGGER_ORDER:
         v = triggers.get(tid)
         if isinstance(v, dict) and v.get("found"):
-            out.append({"segment": tid, "score": v.get("score") or 0,
-                        "headline": v.get("headline") or "", "date": v.get("date") or ""})
+            m = {"segment": tid, "score": v.get("score") or 0,
+                 "headline": v.get("headline") or "", "date": v.get("date") or ""}
+            # Value Global feedback issue 10: a found verdict under the send
+            # floor never drives trigger copy (send_gate is stdlib-only).
+            if _send_gate().below_floor(tid, m["score"]):
+                floor = _send_gate().send_floor(tid)
+                held.append({**m, "why": f"{SEGMENT_LABELS.get(tid, tid)} {m['score']} < "
+                                         f"send floor {floor}"})
+            else:
+                out.append(m)
+        elif _send_gate().separate_unit(v):
+            # downgraded (or researched non-found) because the acquired company
+            # stays a separate unit: a HOLD, not an absence of signal
+            held.append({"segment": tid, "score": 0, "date": (v or {}).get("date") or "",
+                         "headline": (v or {}).get("summary") or "",
+                         "why": "M&A: acquired company runs as a separate unit"})
+    if held and not out:
+        # no trigger qualifies: HOLD the account (like suppressed) even when it
+        # has a hiring membership — never quietly re-route to the default path
+        best = max(held, key=lambda m: m["score"])
+        return [{"segment": "held_trigger", "score": best["score"] or None,
+                 "headline": f"{best['why']}: {best['headline']}"[:300],
+                 "date": best["date"], "held": held}]
     try:
         hd = json.loads(sig_row.get("hiring_detail") or "{}") or {}
     except (ValueError, TypeError):
@@ -4204,6 +4247,13 @@ def _account_memberships(sig_row):
     if not out:
         out.append({"segment": "no_signals", "score": None, "headline": "", "date": ""})
     return out
+
+
+def _send_gate():
+    """send_gate module (stdlib-only; lives with the pipeline scripts)."""
+    sys.path.insert(0, str(GENERATE_BATCH.parent))
+    import send_gate  # noqa: E402
+    return send_gate
 
 
 def _gated_accounts_with_signals():
@@ -4329,8 +4379,8 @@ def do_approve_segments(segments=None, domains=None, approve_all=False):
     no_signals); trigger winners generate through the erp-trigger path.
     Batches the approved contacts and auto-starts generation on the new
     batches. Returns (payload, status)."""
-    # 'suppressed' is a display bucket, never an approvable segment.
-    selected = {s for s in (segments or []) if s in SEGMENT_LABELS and s != "suppressed"}
+    # held buckets ('suppressed', 'held_trigger') are display-only, never approvable.
+    selected = {s for s in (segments or []) if s in SEGMENT_LABELS and s not in HELD_SEGMENTS}
     want_domains = {str(d).strip().lower() for d in (domains or []) if str(d).strip()}
     if not (approve_all or selected or want_domains):
         return {"ok": False, "error": "nothing selected — pass segments, domains, or all"}, 400
@@ -4356,6 +4406,16 @@ def do_approve_segments(segments=None, domains=None, approve_all=False):
                 approvals.append({"domain": a["domain"], "segment": "no_signals", "variant": None})
             continue
         mships = _account_memberships(row)
+        if mships and mships[0]["segment"] == "held_trigger":
+            # no trigger clears the floor / all are separate-unit (issue 10): held.
+            # Only an explicit domain pushes it through, on the default path.
+            if a["domain"] not in want_domains:
+                continue
+            overridden.append({"domain": a["domain"], "reason": mships[0]["headline"]})
+            print(f"[segments] OVERRIDE: approving held-trigger account {a['domain']} "
+                  f"({mships[0]['headline'][:120]})", flush=True)
+            approvals.append({"domain": a["domain"], "segment": "no_signals", "variant": None})
+            continue
         if approve_all or a["domain"] in want_domains:
             pool = mships
         else:
@@ -4785,7 +4845,45 @@ def variant_breakdown():
         den = a["enrolled"] or a["total"]
         out.append({"variant": v, **a,
                     "interested_rate_pct": round(100 * a["interested"] / den, 3) if den else None})
-    return {"variants": out, "interested_total": len(interested)}
+    return {"variants": out, "tracks": track_breakdown(interested),
+            "interested_total": len(interested)}
+
+
+TRACK_ORDER = ["retirement", "data_split", "archiving", "hold", "unrouted"]
+
+
+def track_breakdown(interested=None):
+    """Feedback 7.5: outcomes per messaging track. contacts.track is stamped at
+    ingest; rows ingested before it existed derive it (non-trigger copy is the
+    archiving pitch; pre-routing trigger copy is 'unrouted'). Interested
+    replies are the outcome measured locally — booked meetings are not recorded
+    in the console (no CRM), so they cannot be split here yet."""
+    interested = _interested_emails() if interested is None else interested
+    try:
+        with db_connect() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(contacts)")}
+            tcol = "track" if "track" in cols else "NULL"
+            rows = conn.execute(
+                f"SELECT {tcol} track, variant, status, email FROM contacts "
+                f"WHERE status IN ('generated','enrolled','skipped','failed')").fetchall()
+    except sqlite3.Error:
+        return []
+    agg = {}
+    for r in rows:
+        t = r["track"] or ("unrouted" if r["variant"] == ERP_VARIANT else "archiving")
+        a = agg.setdefault(t, {"total": 0, "enrolled": 0, "interested": 0})
+        a["total"] += 1
+        if r["status"] == "enrolled":
+            a["enrolled"] += 1
+            if (r["email"] or "").strip().lower() in interested:
+                a["interested"] += 1
+    out = []
+    for t in TRACK_ORDER + [k for k in agg if k not in TRACK_ORDER]:
+        if t in agg:
+            a = agg[t]
+            out.append({"track": t, **a, "interested_rate_pct":
+                        round(100 * a["interested"] / a["enrolled"], 3) if a["enrolled"] else None})
+    return out
 
 
 def do_generate_samples(company=None, domain=None, from_email=None):

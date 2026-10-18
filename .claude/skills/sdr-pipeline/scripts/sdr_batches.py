@@ -85,11 +85,12 @@ def cmd_get_batch(args):
 def cmd_ingest(args):
     import generate_batch as G  # variant-aware linter (reads asset['variant'])
     conn = db.connect()
+    db.init_schema(conn)  # additive migrations (e.g. contacts.track) before the UPDATEs below
     rows = db.get_batch(conn, args.batch_id)
     if not rows:
         print(f"batch {args.batch_id}: no contacts")
         return 1
-    gen = bad = 0
+    gen = bad = held = 0
     generated_assets = []  # (contact_id, asset) that ingested clean
     for r in rows:
         p = db.GEN_DIR / f"{r['contact_id']}.json"
@@ -99,6 +100,20 @@ def cmd_ingest(args):
             continue
         try:
             asset = json.loads(p.read_text())
+            # reporting dimension (feedback 7.5): retirement / data_split /
+            # archiving / hold; non-trigger copy is the archiving pitch
+            track = asset.get("track") or ("archiving" if asset.get("variant") != G.ERP_VARIANT
+                                           else None)
+            conn.execute("UPDATE contacts SET track=? WHERE contact_id=?",
+                         (track, r["contact_id"]))
+            conn.commit()
+            if asset.get("held"):  # routing held the account (e.g. separate unit)
+                reason = (asset.get("held_reason")
+                          or f"held: {(asset.get('route') or {}).get('reason') or 'by routing'}")
+                status = "failed" if asset.get("held_status") == "failed" else "skipped"
+                db.set_contact_status(conn, r["contact_id"], status, reason[:400])
+                held += 1
+                continue
             issues = G.lint_assets(asset)
             conn.execute("UPDATE contacts SET variant=? WHERE contact_id=?",
                          (asset.get("variant", "value-give"), r["contact_id"]))
@@ -131,7 +146,8 @@ def cmd_ingest(args):
                     notes += f" {res['failed']} failed"
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"[notes] writeback skipped: {e}\n")
-    print(f"batch {args.batch_id} ingested: {gen} generated, {bad} failed{notes}")
+    held_s = f", {held} held" if held else ""
+    print(f"batch {args.batch_id} ingested: {gen} generated, {bad} failed{held_s}{notes}")
     return 0
 
 
@@ -278,6 +294,48 @@ def cmd_enroll(args):
     rows = kept
     if not rows:
         print(f"enroll: all contacts suppressed. {counts}")
+        return 0
+
+    # Name gate (Value Global feedback issue 9: "Cspa" greeted in every touch).
+    # Copy written with a name that fails the check — or that generation would
+    # now repair — never enrolls; it goes back to `failed` for regeneration.
+    import send_gate as SG  # noqa: E402 (stdlib-only)
+    kept = []
+    for r in rows:
+        nc = SG.name_check(r.get("first_name"), r.get("last_name"), r.get("email"),
+                           r.get("linkedin_url"))
+        reason = None if (nc["ok"] and not nc["fixed"]) else f"name check: {nc['reason']}"
+        if reason is None:
+            # bind the WRITTEN copy to a name repair: copy generated before it
+            # still greets the replaced name ("Cspa,") — recorded at repair
+            # time as import_flags name_fixed:<old>
+            try:
+                old = [f.split(":", 1)[1] for f in json.loads(r.get("import_flags") or "[]")
+                       if str(f).startswith("name_fixed:")]
+            except (ValueError, TypeError):
+                old = []
+            if old:
+                try:
+                    body1 = (json.loads((db.GEN_DIR / f"{r['contact_id']}.json").read_text())
+                             .get("email") or {}).get("body1", "")
+                except (OSError, ValueError):
+                    body1 = ""
+                stale = SG.greets_stale_name(body1, old)
+                if stale:
+                    reason = (f"name check: copy still greets the replaced name {stale!r} "
+                              f"(now {nc['name']!r}); regenerate")
+        if reason is None:
+            kept.append(r)
+            continue
+        counts["name_check"] = counts.get("name_check", 0) + 1
+        if args.dry_run:
+            print(f"  [name] {r['email']} — {reason}, will not enroll")
+        else:
+            db.set_contact_status(conn, r["contact_id"], "failed", error=reason[:400])
+            print(f"  [name] {r['email']} — {reason}")
+    rows = kept
+    if not rows:
+        print(f"enroll: nothing left after the name check. {counts}")
         return 0
 
     # Monthly volume guardrail (client program: 1,500-3,000 contacts/month,

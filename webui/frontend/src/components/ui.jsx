@@ -28,7 +28,8 @@ export function Stat({ label, value, sub, accent = false, tone }) {
 // Import-time lead-quality flags (csv_audience.lead_flags). OFF_ICP_FLAGS
 // mirrors the server's OFF_ICP_FLAGS: outside US/CA, <1,000 employees,
 // healthcare — shown amber; the rest are informational (muted).
-export const OFF_ICP_FLAGS = ['non_us_ca', 'country_inferred', 'below_icp_floor', 'healthcare']
+export const OFF_ICP_FLAGS = ['non_us_ca', 'country_inferred', 'below_icp_floor', 'healthcare',
+  'title_not_buyer', 'name_check']
 export const FLAG_LABELS = {
   non_us_ca: 'outside US/CA',
   country_inferred: 'non-US/CA domain',
@@ -36,6 +37,10 @@ export const FLAG_LABELS = {
   healthcare: 'healthcare',
   country_unknown: 'no country',
   no_linkedin: 'no LinkedIn',
+  title_not_buyer: 'title not a buyer',
+  name_check: 'name mismatch',
+  name_fixable: 'name auto-fix',
+  name_fixed: 'name fixed',
 }
 
 export function flagLabel(flag) {
