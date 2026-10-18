@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
-import { Badge, Spinner, ErrorBanner } from './ui.jsx'
+import { Badge, Spinner, ErrorBanner, Truncate } from './ui.jsx'
 import { SortTh, useSort } from './sortable.jsx'
 
 // Slide-over drawer for one cached account: the full research signal, the
@@ -295,7 +295,7 @@ export default function SignalDetail({ domain, onClose, onChanged }) {
                   {contactSort.rows.map((c) => (
                     <tr key={c.contact_id}>
                       <td>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || <span className="muted">—</span>}</td>
-                      <td className="muted" style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.title}>{c.title || '—'}</td>
+                      <td className="muted"><Truncate text={c.title} max={160}>{c.title || '—'}</Truncate></td>
                       <td>{c.persona ? <Badge kind="persona" value={c.persona} /> : <span className="muted">—</span>}</td>
                       <td>{c.status ? <Badge kind="status" value={c.status} /> : <span className="muted">—</span>}</td>
                       <td className="muted">{c.batch_id != null ? `#${c.batch_id}` : '—'}</td>

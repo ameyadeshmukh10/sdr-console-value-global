@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
-import { Badge, Spinner, ErrorBanner, FlagChips, flagLabel, num } from '../components/ui.jsx'
+import { Badge, Spinner, ErrorBanner, FlagChips, flagLabel, num, Truncate } from '../components/ui.jsx'
 import { SortTh, nextSort } from '../components/sortable.jsx'
 import OutreachDetail from '../components/OutreachDetail.jsx'
 
@@ -202,7 +202,7 @@ export default function OutreachPage() {
         <span className="muted">{loading ? <Spinner /> : `${num(data?.total || 0)} sequences`}</span>
       </div>
 
-      <div className="panel" style={{ padding: 0 }}>
+      <div className="panel" style={{ padding: 0, overflowX: 'auto' }}>
         <table>
           <thead>
             <tr>
@@ -222,10 +222,10 @@ export default function OutreachPage() {
               </th>
               <SortTh label="Name" k="name" sort={sort} onSort={toggleSort} />
               <SortTh label="Company" k="company" sort={sort} onSort={toggleSort} />
-              <SortTh label="Persona" k="persona" sort={sort} onSort={toggleSort} />
-              <SortTh label="CTA play" k="cta_type" sort={sort} onSort={toggleSort} />
+              {/* persona / CTA play / status stacked in one column; sorts by status
+                  (persona and CTA play have their own filters above) */}
+              <SortTh label="Persona · CTA · Status" k="status" sort={sort} onSort={toggleSort} />
               <SortTh label="Trigger" k="segment" sort={sort} onSort={toggleSort} />
-              <SortTh label="Status" k="status" sort={sort} onSort={toggleSort} />
               <SortTh label="Approval" k="approval" sort={sort} onSort={toggleSort} />
               <SortTh label="Lead flags" k="flags" sort={sort} onSort={toggleSort} />
               <SortTh label="Signal" k="signal" sort={sort} onSort={toggleSort} />
@@ -242,14 +242,18 @@ export default function OutreachPage() {
                 </td>
                 <td>{r.first_name} {r.last_name}{r.edited && <span className="badge muted" style={{ marginLeft: 6 }}>edited</span>}</td>
                 <td>{r.company || <span className="muted">—</span>}</td>
-                <td><Badge kind="persona" value={r.persona} /></td>
-                <td><span className="badge cta">{r.cta_type}</span></td>
+                <td>
+                  <div className="badge-stack">
+                    <Badge kind="persona" value={r.persona} />
+                    <span className="badge cta">{r.cta_type}</span>
+                    <Badge kind="status" value={r.status} />
+                  </div>
+                </td>
                 <td>
                   {r.segment
                     ? <span className="badge" style={{ color: 'var(--jade)', borderColor: 'var(--jade)' }}>{r.segment_label || r.segment}</span>
                     : <span className="muted">—</span>}
                 </td>
-                <td><Badge kind="status" value={r.status} /></td>
                 <td>
                   {!r.gated ? <span className="muted" title="autonomous (SLA) — no approval gate">auto</span>
                     : r.approved ? <span className="badge" style={{ color: 'var(--green)', borderColor: 'var(--green)' }}>✓ approved</span>
@@ -257,11 +261,11 @@ export default function OutreachPage() {
                         : <span className="muted">—</span>}
                 </td>
                 <td><FlagChips flags={r.flags} country={r.country} /></td>
-                <td className="muted" style={{ maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.signal}</td>
+                <td className="muted"><Truncate text={r.signal} max={320} /></td>
               </tr>
             ))}
             {data && data.items.length === 0 && !loading && (
-              <tr><td colSpan={10}><div className="empty">No matching sequences.</div></td></tr>
+              <tr><td colSpan={8}><div className="empty">No matching sequences.</div></td></tr>
             )}
           </tbody>
         </table>

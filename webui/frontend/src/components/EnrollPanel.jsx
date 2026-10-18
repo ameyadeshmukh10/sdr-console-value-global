@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
-import { Spinner, ErrorBanner, FlagChips, OFF_ICP_FLAGS, num } from './ui.jsx'
+import { Spinner, ErrorBanner, FlagChips, OFF_ICP_FLAGS, num, Truncate } from './ui.jsx'
 import { SortTh, useSort } from './sortable.jsx'
 import OutreachDetail from './OutreachDetail.jsx'
 
@@ -183,8 +183,7 @@ export default function EnrollPanel({ generatedReady, awaitingApproval = 0, onCh
                         <td><span className={`badge persona-${r.persona}`}>{r.persona}</span></td>
                         <td>{r.cta_type ? <span className="badge cta">{r.cta_type}</span> : '—'}</td>
                         <td><FlagChips flags={r.flags} country={r.country} /></td>
-                        <td className="muted" style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {r.signal || '—'}</td>
+                        <td className="muted"><Truncate text={r.signal} max={300}>{r.signal || '—'}</Truncate></td>
                         <td>{r.campaign}</td>
                       </tr>
                     ))}

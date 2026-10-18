@@ -102,3 +102,10 @@ export function pct(v) {
 export function num(v) {
   return v == null ? '—' : v.toLocaleString()
 }
+
+// One-line text clipped with an ellipsis inside a table cell; the full text is
+// the hover title. Browsers ignore max-width on <td> itself, so a long value
+// would stretch the table past its panel — the limit lives on this inner block.
+export function Truncate({ text, max = 320, children }) {
+  return <div className="truncate" style={{ maxWidth: max }} title={text || undefined}>{children ?? text}</div>
+}

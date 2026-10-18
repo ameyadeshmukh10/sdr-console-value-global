@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api.js'
-import { Spinner, ErrorBanner, num } from './ui.jsx'
+import { Spinner, ErrorBanner, num, Truncate } from './ui.jsx'
 import { SortTh, useSort } from './sortable.jsx'
 import SignalDetail from './SignalDetail.jsx'
 
@@ -248,8 +248,7 @@ function SegmentAccountsTable({ seg: s, onOpen }) {
             </td>
             <td>{num(a.contacts)}</td>
             {s.kind === 'trigger' && <td>{a.score ?? '—'}</td>}
-            <td className="muted" style={{ maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-              title={a.headline}>{a.headline || a.tech || '—'}</td>
+            <td className="muted"><Truncate text={a.headline} max={420}>{a.headline || a.tech || '—'}</Truncate></td>
           </tr>
         ))}
       </tbody>
