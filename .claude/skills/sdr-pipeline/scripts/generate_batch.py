@@ -310,8 +310,8 @@ plus 3 LinkedIn touches anchored on that trigger.
   1's opener, never "just following up". Then offer the free Data Lifecycle Assessment by what
   they get: a data-growth profile, which modules are archive candidates, a quantified savings
   number, and a phased roadmap, with the link www.valueglobal.net/archiving-solutions. End
-  with: "Can I send over a sample report so you can see exactly what that looks like for an
-  environment like <Company>'s?" NEVER offer case studies, references, success stories, or
+  with the closed offer to set it up: "Want me to set that up for <Company>?" NEVER offer a
+  sample report (not cleared for use yet). NEVER offer case studies, references, success stories, or
   "how similar companies/acquirers handled it": no case studies exist for this offering yet.
   No meeting ask in touch 2.
 - Touch 3: a short, specific meeting ask: 20 minutes to walk through what the archive / separation /
@@ -711,6 +711,28 @@ _STAYING_PAIN = re.compile(r"\bslow(er)? quer|\bbackups?\b|\bclon(e|es|ing)\b|mo
 _ARCHIVING_OFFER = re.compile(r"\barchiving\b|\bassessment\b|\bwhite ?paper\b", re.I)
 _LICENSE = re.compile(r"\blicen[cs]", re.I)
 _PERCENT = re.compile(r"\d\s?%|\bpercent\b", re.I)
+# The ONLY figures cleared for the retirement track (client feedback, section 3):
+# $1M to $6M (InfoCorvus-attributed), one 2 TB EBS environment retired in a month,
+# 20 to 30 pre-built reports. Anything else — $8.2M, 13 weeks, 11.3 TB, 68 TB,
+# a different report count — is uncleared until Value Global confirms it.
+_DOLLAR = re.compile(r"\$\s?\d[\d.,]*\s?(m|k|b|million|billion)?\b", re.I)
+_TB = re.compile(r"\b(\d[\d.,]*)\s?tb\b", re.I)
+_REPORTS = re.compile(r"\b(\d+)(?:\s?(?:to|-)\s?(\d+))?\s+(?:pre-?built\s+)?(?:read-?only\s+)?"
+                      r"reports\b", re.I)
+_DURATION_CLAIM = re.compile(r"\b13\s?weeks\b|\b12\s?(to|-)\s?24\s?months\b", re.I)  # InfoCorvus timelines
+
+
+def _uncleared_figures(body):
+    """Figures on the retirement track other than the three cleared proofs."""
+    bad = [m.group(0) for m in _DOLLAR.finditer(body)
+           if re.sub(r"[\s,]", "", m.group(0)).lower() not in ("$1m", "$6m")]
+    bad += [m.group(0) for m in _TB.finditer(body) if m.group(1) != "2"]
+    bad += [m.group(0) for m in _REPORTS.finditer(body)
+            if (m.group(1), m.group(2)) != ("20", "30")]
+    bad += [m.group(0) for m in _DURATION_CLAIM.finditer(body)]
+    return bad
+
+
 # Transition periods run from CLOSING (client feedback issue 6).
 _CLOCK_AT_ANNOUNCE = re.compile(r"\bclock\b[^.?!\n]{0,60}\bannounce", re.I)
 
@@ -761,6 +783,11 @@ def _lint_retire(email, route):
             issues.append(f"step{n}: link present (no links on the retirement track)")
         if L.INFOCORVUS_FIGURES.search(b) and "infocorvus" not in b.lower():
             issues.append(f"step{n}: InfoCorvus figure without the vendor attribution")
+        unc = _uncleared_figures(b)
+        if unc:
+            issues.append(f"step{n}: uncleared figure(s) {unc[:3]} (only $1M to $6M with the "
+                          "InfoCorvus attribution, the anonymous 2 TB in a month, and 20 to 30 "
+                          "reports are cleared)")
         if not route.get("licensing") and _LICENSE.search(b):
             issues.append(f"step{n}: mentions licensing ({route.get('reason') or 'not allowed'})")
     b1 = steps[0]["body"]
@@ -1052,6 +1079,9 @@ def _lint_short(email, lo=35, hi=110):
                         (L.RECIPIENT_ASSERTION, "asserts a fact about the recipient"),
                         (L.LICENSING_NUMBER, "licensing/footprint percentage in cold copy"),
                         (L.BOOKING, "booking/scheduling link or tool"),
+                        (L.FORBIDDEN_CTA, "offers an uncleared asset (sample report / pilot)"),
+                        (L.UNCONFIRMED_FIGURES, "unconfirmed InfoCorvus figure (pending Value "
+                                                "Global sign-off; only $1M to $6M is cleared)"),
                         (L.BAD_DOMAIN, "valueglobal.com (the domain is valueglobal.net)")):
             if rx.search(b):
                 issues.append(f"step{s['n']}: {msg}")

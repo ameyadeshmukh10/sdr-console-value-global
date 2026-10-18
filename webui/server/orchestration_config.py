@@ -370,6 +370,7 @@ LINT_LABELS = [
     ("BOOKING", "no booking/scheduling links or tools"),
     ("STATS", "at most two credibility stats per email"),
     ("INFOCORVUS_FIGURES", "InfoCorvus figures carry the vendor attribution"),
+    ("UNCONFIRMED_FIGURES", "no unconfirmed InfoCorvus figures ($8.2M, 40-60%, 60-80%, 13 weeks)"),
     ("PRICING", "no pricing in cold steps"),
 ]
 

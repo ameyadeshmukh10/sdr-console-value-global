@@ -105,15 +105,17 @@ view (see `cta-offers.md`).
 - **Oracle's own EBS environment saved 68 TB** through data optimization — public Oracle example.
 - **$1M to $6M annually per retired legacy application** — InfoCorvus, the platform vendor's
   published estimate; must carry the attribution.
-- **$8.2M annual costs eliminated at a Fortune 500 financial services firm** (three legacy ERP
-  retirements) — InfoCorvus published case; must carry the attribution.
-- **40-60% reduction in cloud storage costs; 60-80% reduction in application retirement
-  timelines; 13 weeks to retire source systems versus 12 to 24 months** — InfoCorvus; each must
-  carry the attribution.
 - **Credibility stats** (company-level): 20 years in business, 100+ clients, 300+ projects,
   1,500+ processes, 50+ Oracle engagements, 2-5x typical ROI — use at most TWO per message.
 - **IRR 30% to 45%** on hard savings for a mid-size ERP, payback under three years —
   illustrative modeled range only; never exceed it, never attach dollar figures in outreach.
+- **Retirement track (M&A / ERP-switch triggers, client feedback 2026-10-09):** ONLY three
+  proofs are cleared there: $1M to $6M per retired legacy system (InfoCorvus-attributed),
+  the anonymous 2 TB EBS environment retired in a month, and 20 to 30 pre-built reports.
+- **UNCONFIRMED, do not use on any track** (Value Global is reconciling the InfoCorvus
+  figures, 2026-10-09): $8.2M eliminated at a Fortune 500 financial services firm;
+  40-60% cloud storage reduction; 60-80% faster retirement timelines; 13 weeks versus 12 to
+  24 months. The linter rejects them; restore here and in `UNCONFIRMED_FIGURES` once cleared.
 - WITHHELD, never use: any "85-95% dormant" figure; named customers; "analysts measured 70%";
   the "up to 85% Oracle licensing reduction" figure stays out of cold copy entirely (it is
   non-Fusion-only and too easy to misapply; "the retired environment's license goes to zero"

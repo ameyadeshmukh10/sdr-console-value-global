@@ -373,7 +373,15 @@ application-**retirement** pitch, never the staying-on-EBS archiving pain.
   three cleared proofs with exact attribution, touch 1 ends on a question, 20-minute
   retirement call in touches 2 AND 3, plain breakup, no links/assessment/sample
   report/white paper). `_lint_retire` enforces it, incl. staying-pain words, any `%`,
-  "clock … announced", and licensing when the route forbids it. `lint_assets` passes
+  "clock … announced", licensing when the route forbids it, and any figure beyond the
+  three cleared proofs (`_uncleared_figures`: other $ amounts, TB sizes, report counts,
+  "13 weeks"). The archiving-track prompt no longer offers the uncleared sample report
+  (touch 2 now closes on "Want me to set that up for <Company>?") and `_lint_short`
+  rejects `FORBIDDEN_CTA` on every trigger track. **Every** path (default `lint_email`,
+  archiving `_lint_short`, retirement) rejects `L.UNCONFIRMED_FIGURES` — the InfoCorvus
+  $8.2M / 40-60% / 60-80% / 13 weeks / 12-24 months figures Value Global is still
+  reconciling; remove a pattern there (and restore it in offer.md) once the client
+  confirms it. `lint_assets` passes
   `asset["route"]`; assets without a route lint exactly as before.
 - **Gotcha:** operator play overrides (`erp_plays.json` on the volume) for `ma_carveout` /
   `erp_migration` still win per field — reset them in the Orchestration view if they hold
