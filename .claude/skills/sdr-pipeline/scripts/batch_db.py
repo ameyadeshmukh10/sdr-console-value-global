@@ -485,15 +485,17 @@ def upsert_signal(conn, domain, company_name, signal, has_recent, model=None):
     conn.commit()
 
 
-def upsert_composite_signal(conn, domain, signal, model=None, has_recent=True):
+def upsert_composite_signal(conn, domain, signal, model=None, has_recent=True, force=False):
     """Store the news-composite signal WITHOUT clobbering fresher research.
     Unlike upsert_signal (the batch-generation writer, which deliberately
     overwrites with its own verified research), this writes signal/has_recent/
     researched_at/model ONLY when the row has no fresh signal — an existing
     generation-researched signal inside its 90-day window always wins — and it
-    NEVER touches company_name. Returns True when the write happened."""
+    NEVER touches company_name. `force` skips the freshness check (the UI
+    Refresh on a found-trigger account, and --recompose --replace-generic).
+    Returns True when the write happened."""
     row = get_signal(conn, domain)
-    if row and (row.get("signal") or "").strip() and signal_fresh(row):
+    if not force and row and (row.get("signal") or "").strip() and signal_fresh(row):
         return False
     conn.execute("""
         INSERT INTO account_signals (domain, signal, has_recent, researched_at, model, updated_at)

@@ -75,6 +75,7 @@ LAST stdout line):
     python3 news_signals.py --self-test      # offline; no network, no key
     python3 news_signals.py --refloor [--dry-run] [--limit N]   # guard stored verdicts (DB-only)
     python3 news_signals.py --recompose [--limit N] [--force]   # composites for stored found rows
+    python3 news_signals.py --recompose --replace-generic [--dry-run]  # + overwrite generic anchors
 
 Every non-skipped scan costs real Anthropic spend — up to 6 API calls (5
 research with 3-4 web searches each, capped at 16 total, plus 1 no-search
@@ -1442,12 +1443,89 @@ def refloor_stored(limit=None, dry_run=False):
     return {"scanned": len(rows), "changed": len(updates), "dry_run": bool(dry_run)}
 
 
-def recompose_stored(limit=None, force=False):
+# The research-only refresh (generate_batch.research_signal) and the default
+# generation path write these anchors when they found no news — they carry no
+# trigger content, so a composite from stored found verdicts always beats them.
+GENERIC_SIGNAL_PREFIXES = ("company anchor -", "no recent signal")
+
+
+def is_generic_signal(signal):
+    return (signal or "").strip().lower().startswith(GENERIC_SIGNAL_PREFIXES)
+
+
+def _found_triggers(news_detail):
+    """The stored per-trigger verdicts when >=1 was FOUND, else None."""
+    try:
+        triggers = (json.loads(news_detail or "{}") or {}).get("triggers") or {}
+    except (ValueError, TypeError):
+        return None
+    if any(isinstance(v, dict) and v.get("found") for v in triggers.values()):
+        return triggers
+    return None
+
+
+def _composite_has_recent(triggers):
+    return any(isinstance(v, dict) and v.get("found")
+               for t, v in triggers.items() if t != "ebs_performance")
+
+
+def has_found_triggers(domain):
+    conn = _db()
+    try:
+        row = db.get_signal(conn, (domain or "").strip().lower())
+    finally:
+        conn.close()
+    return bool(row and _found_triggers(row.get("news_detail")))
+
+
+def recompose_domain(domain):
+    """UI Refresh for an account whose stored news scan FOUND >=1 trigger:
+    rebuild the composite from the stored verdicts + current tech/hiring lines
+    (one no-search call) and store it OVERWRITING the current signal — the
+    research-only refresh would replace it with a generic company anchor.
+    Returns a result dict; None when the account has no found triggers (the
+    caller falls back to the research refresh). A compose failure stores
+    nothing and returns {"error": ...} — the existing signal is kept."""
+    domain = (domain or "").strip().lower()
+    conn = _db()
+    try:
+        row = db.get_signal(conn, domain)
+    finally:
+        conn.close()
+    triggers = _found_triggers((row or {}).get("news_detail"))
+    if not triggers:
+        return None
+    # network call — never hold a DB connection across it
+    text, err = compose_signal(row.get("company_name"), domain, triggers,
+                               tech_line=row.get("tech_signals"),
+                               hiring_line=row.get("hiring_signals"))
+    if not text:
+        return {"domain": domain, "source": "news_composite", "error": err, "stored": False}
+    model = None
+    try:
+        model = _client((os.environ.get("NEWS_COMPOSITE_MODEL") or "").strip() or None).model
+    except Exception:  # noqa: BLE001
+        pass
+    conn = _db()
+    try:
+        stored = db.upsert_composite_signal(conn, domain, text, model=model,
+                                            has_recent=_composite_has_recent(triggers),
+                                            force=True)
+    finally:
+        conn.close()
+    return {"domain": domain, "company_name": row.get("company_name"), "signal": text,
+            "source": "news_composite", "stored": stored, "web_searches": 0}
+
+
+def recompose_stored(limit=None, force=False, replace_generic=False, dry_run=False):
     """Synthesize composites for rows whose STORED scan found >=1 trigger but
     whose signal column is empty or stale — the composite feature shipped
     after those rows were researched, and the cache-hit skip means they'd
     otherwise wait out NEWS_REFRESH_DAYS. One no-search API call per row
-    (real spend — use --limit). Fill-only semantics, same as a live scan."""
+    (real spend — use --limit). Fill-only semantics, same as a live scan —
+    except `replace_generic`, which also overwrites a FRESH generic anchor
+    ("company anchor - …" / "no recent signal …", see is_generic_signal) on a
+    found-trigger row. `dry_run` lists the rows it would compose, no API calls."""
     ok, reason = news_available()
     if not ok:
         raise RuntimeError(f"news research unavailable: {reason}")
@@ -1460,20 +1538,23 @@ def recompose_stored(limit=None, force=False):
     finally:
         conn.close()
     summary = {"eligible": 0, "attempted": 0, "stored": 0, "skipped_fresh": 0, "errors": 0}
+    if dry_run:
+        summary["would_compose"] = []
     for r in rows:
-        try:
-            triggers = (json.loads(r["news_detail"]) or {}).get("triggers") or {}
-        except (ValueError, TypeError):
-            continue
-        if not any(isinstance(v, dict) and v.get("found") for v in triggers.values()):
+        triggers = _found_triggers(r["news_detail"])
+        if not triggers:
             continue
         summary["eligible"] += 1
-        if not force and (r.get("signal") or "").strip() and db.signal_fresh(r):
+        generic = replace_generic and is_generic_signal(r.get("signal"))
+        if not force and not generic and (r.get("signal") or "").strip() and db.signal_fresh(r):
             summary["skipped_fresh"] += 1
             continue
         if limit and summary["attempted"] >= int(limit):
             break
         summary["attempted"] += 1
+        if dry_run:
+            summary["would_compose"].append(r["domain"])
+            continue
         text, err = compose_signal(r.get("company_name"), r["domain"], triggers,
                                    tech_line=r.get("tech_signals"),
                                    hiring_line=r.get("hiring_signals"))
@@ -1489,8 +1570,7 @@ def recompose_stored(limit=None, force=False):
         try:
             if db.upsert_composite_signal(
                     conn, r["domain"], text, model=model,
-                    has_recent=any(isinstance(v, dict) and v.get("found")
-                                   for t, v in triggers.items() if t != "ebs_performance")):
+                    has_recent=_composite_has_recent(triggers), force=generic):
                 summary["stored"] += 1
         finally:
             conn.close()
@@ -1740,7 +1820,10 @@ def main():
                     help="force the synchronous thread pool (skip the Message "
                          "Batches API and its 50%% token discount)")
     ap.add_argument("--dry-run", action="store_true", dest="dry_run",
-                    help="with --refloor: report what would change, write nothing")
+                    help="with --refloor / --recompose: report what would change, write nothing")
+    ap.add_argument("--replace-generic", action="store_true", dest="replace_generic",
+                    help="with --recompose: also overwrite a fresh generic 'company anchor' / "
+                         "'no recent signal' signal on found-trigger rows")
     args = ap.parse_args()
 
     if args.self_test:
@@ -1751,7 +1834,8 @@ def main():
         print(json.dumps(summary))
         return
     if args.recompose:
-        summary = recompose_stored(limit=args.limit, force=args.force)
+        summary = recompose_stored(limit=args.limit, force=args.force,
+                                   replace_generic=args.replace_generic, dry_run=args.dry_run)
         log(f"recompose done: {summary}")
         print(json.dumps(summary))
         return

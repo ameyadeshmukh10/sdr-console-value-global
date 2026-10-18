@@ -3771,7 +3771,20 @@ def do_refresh_signal(domain, company=None):
             company = row["company"] if row else ""
     sys.path.insert(0, str(GENERATE_BATCH.parent))
     import generate_batch as G  # noqa: E402
-    res = G.research_signal(domain, company)
+    res = None
+    # An account whose news scan FOUND a trigger refreshes by re-composing from
+    # the stored verdicts — the research-only refresh would overwrite that
+    # trigger-anchored signal with a generic "company anchor" line.
+    if _news_status()[0]:
+        import news_signals as N  # noqa: E402
+        if N.has_found_triggers(domain):
+            G._maybe_detect_tech(domain, company)    # same skip-if-fresh freshening
+            G._maybe_detect_hiring(domain, company)  # as research_signal, before composing
+            res = N.recompose_domain(domain)
+            if res and res.get("error"):
+                return {"ok": False, "error": f"composite refresh failed: {res['error']}"}
+    if res is None:
+        res = G.research_signal(domain, company)
     payload = signals_payload()
     payload["ok"] = True
     payload["refreshed"] = res
