@@ -679,7 +679,7 @@ def stage_draft(client, item, contact, deck_data, publish, fallback):
             f"Conversation so far:\n\"\"\"\n{thread_context(item)}\n\"\"\"\n\n"
             f"The signal play we built for them:\n{play_summary(deck_data)}{url_line}{note}\n\n"
             f"Draft the reply. Return ONLY the JSON.")
-    res = client.complete(system, user, use_web_search=False, max_tokens=900, timeout=300)
+    res = client.complete(system, user, use_web_search=False, max_tokens=1800, timeout=300)
     data = extract_json(res["text"])
     return {"draft": sanitize_text(str(data.get("draft", "")).strip()),
             "rationale": sanitize_text(str(data.get("rationale", ""))[:300])}

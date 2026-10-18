@@ -121,7 +121,7 @@ def draft_one(client, system, item):
     user = (f"Prospect: {name}\nTheir interested reply:\n\"\"\"\n{reply}\n\"\"\"\n\n"
             f"(pre-classified as: {hint}).{channel_note} Draft the follow-up. Return ONLY the JSON.")
     try:
-        res = client.complete(system, user, use_web_search=False, max_tokens=700)
+        res = client.complete(system, user, use_web_search=False, max_tokens=1400)
         data = extract_json(res["text"])
         return {"intent": str(data.get("intent", hint)), "draft": str(data.get("draft", "")).strip(),
                 "rationale": str(data.get("rationale", ""))[:300], "error": None}

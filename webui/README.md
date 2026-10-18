@@ -119,7 +119,7 @@ with the server-side `web_search` tool + the ai-sdr knowledge base, forces the J
 validates with the **same** linter `ingest` uses (retry ×2 on failure). The `GenerateJobPanel`
 shows each contact move `researching → done/failed` live with web-search counts and a log; results
 are recorded via `ingest`. One job at a time; cancellable. Model = `CLAUDE_MODEL` (default
-`claude-opus-4-8`). **Everything is stdlib urllib — no `anthropic` SDK, no pip.**
+`claude-opus-5-5`, effort `CLAUDE_EFFORT`, default low). **Everything is stdlib urllib — no `anthropic` SDK, no pip.**
 
 ### Select Target Audience (Use tab)
 The Use tab is now a single **CRM List** panel: a contact/company type dropdown
@@ -161,9 +161,8 @@ runner (`sla_run.py`), the endpoints and the `SLA_ENABLED` scheduler gate.
 ### Clay buying-group enrichment (no Claude Code)
 Select a **company list** → **Enrich buying group** sources GTM-leadership contacts at each
 company via Clay, **without** running through Claude Code:
-- The backend drives **Clay's MCP server** (`https://api.clay.com/v3/mcp`) through the
-  **Anthropic Messages API MCP connector** (`mcp_servers` + `anthropic-beta: mcp-client-2025-04-04`)
-  with a cheap model (`CLAUDE_SOURCING_MODEL`, default `claude-haiku-4-5`). `clay_enrich.py`
+- The backend drives **Clay's MCP server** (`https://api.clay.com/v3/mcp`) over
+  a direct MCP session (`clay_mcp.ClayMCP`, no LLM in the loop). `clay_enrich.py`
   resolves the list's company domains, calls `find-and-enrich-contacts-at-company` per domain,
   and **polls `get-task-context`** (Python-orchestrated cadence) until emails resolve.
 - The resulting candidates flow through the existing **`source_contacts.py`** (dedup within +
@@ -190,8 +189,8 @@ single-variant behavior.
 ### New env vars (.env)
 ```
 ANTHROPIC_API_KEY=sk-ant-...           # required for generation + reply classification + Clay sourcing
-CLAUDE_MODEL=claude-opus-4-8           # model for generation + classification
-CLAUDE_SOURCING_MODEL=claude-haiku-4-5 # cheap model that drives Clay MCP enrichment
+CLAUDE_MODEL=claude-opus-5-5           # model for generation + classification
+CLAUDE_EFFORT=low                      # Opus 5.5 always thinks; effort is the depth/cost lever
 CLAY_MCP_URL=https://api.clay.com/v3/mcp                 # Clay MCP endpoint (OAuth 2.1)
 # CLAY_OAUTH_REDIRECT=...                # optional; auto-derived from the request host when unset
 BISON_INTERESTED_TAG_ID=11             # the "Interested" tag applied on approval

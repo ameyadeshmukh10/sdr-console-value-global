@@ -463,7 +463,7 @@ def generate_contact_erp(contact, segment, verdict, client, write=True, tech_lin
                 ERP_SYSTEM,
                 build_erp_user(contact, segment, verdict, tech_line=tech_line,
                                prior_issues=None if attempt == 1 else issues),
-                use_web_search=False, max_tokens=4096,
+                use_web_search=False, max_tokens=8192,
             )
             u = res.get("usage", {})
             cache_read += u.get("cache_read_input_tokens", 0) or 0
@@ -769,7 +769,7 @@ def generate_contact(contact, knowledge, client, write=True, cached_signal=None,
                            prior_issues=None if attempt == 1 else issues,
                            tech_signals=tech_signals, tech_playbook=tech_playbook,
                            hiring_signals=hiring_signals),
-                use_web_search=use_search, max_web_searches=3, max_tokens=4096,
+                use_web_search=use_search, max_web_searches=3, max_tokens=8192,
             )
             web_searches = res.get("web_search_count", 0)
             u = res.get("usage", {})
@@ -1021,7 +1021,7 @@ def research_signal(domain, company, client=None):
     system = ("You research a B2B company's single most recent GTM signal.\n\n"
               + RESEARCH_ONLY_TASK.format(**_today()))
     user = f"Company: {company or domain} (domain {domain}). Find the recent signal and return only the JSON."
-    res = client.complete(system, user, use_web_search=True, max_web_searches=3, max_tokens=1024)
+    res = client.complete(system, user, use_web_search=True, max_web_searches=3, max_tokens=2048)
     data = extract_json(res["text"])
     signal = (data.get("signal") or "").strip()
     has_recent = bool(data.get("has_recent_signal")) and not signal.lower().startswith("no recent signal")
@@ -1076,7 +1076,7 @@ def generate_samples(company, domain="", client=None):
     system = ("You are an expert B2B SDR copywriter. Be specific, concrete, and human. Ground claims in "
               "what you can actually find; never invent funding figures or fake metrics.")
     user = SAMPLES_TASK.format(company=(company or domain or "the company"), **_today())
-    res = client.complete(system, user, use_web_search=True, max_web_searches=4, max_tokens=2048)
+    res = client.complete(system, user, use_web_search=True, max_web_searches=4, max_tokens=4096)
     data = extract_json(res["text"])
     return {
         "company": company, "domain": domain,
@@ -1100,7 +1100,7 @@ def build_request_params(contact, knowledge, client, cached_signal=None, variant
         build_user(contact, cached_signal=cached_signal, tech_signals=tech_signals,
                    tech_playbook=tech_playbook, hiring_signals=hiring_signals),
         use_web_search=cached_signal is None, max_web_searches=3,
-        max_tokens=4096, cache_ttl="1h",
+        max_tokens=8192, cache_ttl="1h",
     )
 
 
@@ -1121,7 +1121,7 @@ def prepare_batch_requests(contacts, knowledge, client=None, variant=DEFAULT_VAR
                 tech_line, _ = _cached_tech(domain)
                 requests.append({"custom_id": cid, "params": client.build_body(
                     ERP_SYSTEM, build_erp_user(c, seg, verdict, tech_line=tech_line),
-                    use_web_search=False, max_tokens=4096, cache_ttl="1h")})
+                    use_web_search=False, max_tokens=8192, cache_ttl="1h")})
                 # cached_signal = the verdict line, so process_batch_result stores
                 # it verbatim and never re-caches it as a researched signal
                 manifest[cid] = {"contact": c, "domain": domain, "variant": ERP_VARIANT,

@@ -9,7 +9,8 @@ web_search tool) and interested-reply classification (no tools).
   r = c.complete(system="...", user="...", use_web_search=True)
   data = extract_json(r["text"])             # robust JSON extraction
 
-Env: ANTHROPIC_API_KEY (required), CLAUDE_MODEL (default claude-opus-4-8).
+Env: ANTHROPIC_API_KEY (required), CLAUDE_MODEL (default claude-opus-5-5),
+CLAUDE_EFFORT (default low; `none` omits it — see AnthropicClient.__init__).
 CLI self-test:  python3 anthropic_client.py "say hi as json {\"ok\":true}"
 """
 
@@ -24,12 +25,14 @@ from pathlib import Path
 API_URL = "https://api.anthropic.com/v1/messages"
 BATCH_URL = "https://api.anthropic.com/v1/messages/batches"
 ANTHROPIC_VERSION = "2023-06-01"
-DEFAULT_MODEL = "claude-opus-4-8"
+DEFAULT_MODEL = "claude-opus-5-5"
+# Opus 5.5 always thinks (thinking can't be disabled; omitted = adaptive) and its
+# own effort default is medium. Effort is the only depth/cost lever; these calls
+# are short copy / JSON tasks, so default low. Thinking tokens bill as output and
+# count toward max_tokens.
+DEFAULT_EFFORT = "low"
 # Server-side web search tool (model runs the search internally; no client loop).
 WEB_SEARCH_TOOL_TYPE = "web_search_20250305"
-# Remote MCP connector beta — lets the Messages API call tools on a remote MCP
-# server (e.g. Clay) server-side; results come back as mcp_tool_result blocks.
-MCP_CONNECTOR_BETA = "mcp-client-2025-04-04"
 
 
 def _load_dotenv():
@@ -69,6 +72,11 @@ class AnthropicClient:
                 "root or export it in your shell."
             )
         self.model = model or os.environ.get("CLAUDE_MODEL") or DEFAULT_MODEL
+        # Effort scopes to the generation model only: callers that pin their own
+        # model (NEWS_MODEL, per-trigger overrides) keep that model's default —
+        # some older models (Haiku 4.5) reject the field outright.
+        effort = (os.environ.get("CLAUDE_EFFORT") or DEFAULT_EFFORT).strip().lower()
+        self.effort = None if model or effort in ("none", "off") else effort
 
     def complete(self, system, user, *, use_web_search=False, max_web_searches=3,
                  max_tokens=4096, temperature=None, timeout=180, cache_system=True):
@@ -78,13 +86,13 @@ class AnthropicClient:
         assistant turn — no client-side tool loop is required.
 
         temperature is omitted from the request unless explicitly set — newer
-        models (e.g. Opus 4.8) reject an explicit temperature.
+        models (Opus 4.7+, Sonnet 5+) reject an explicit temperature.
 
         cache_system (default True) sends the system prompt as an ephemeral cached
         block. The system prefix (incl. the tools block) is then written to cache
         once and read back at 0.1x on every subsequent call with the same prefix
         within ~5 min — e.g. every contact in a batch and every retry. Prompts
-        under the model's minimum (1024 tokens for Opus 4.8) are silently not
+        under the model's minimum (model-dependent, 512-4096 tokens) are silently not
         cached, no error.
         """
         body = self.build_body(system, user, use_web_search=use_web_search,
@@ -113,6 +121,8 @@ class AnthropicClient:
         }
         if temperature is not None:
             body["temperature"] = temperature
+        if self.effort:
+            body["output_config"] = {"effort": self.effort}
         if use_web_search:
             body["tools"] = [{
                 "type": WEB_SEARCH_TOOL_TYPE,
@@ -120,31 +130,6 @@ class AnthropicClient:
                 "max_uses": max_web_searches,
             }]
         return body
-
-    def complete_with_mcp(self, system, user, mcp_servers, *, model=None,
-                          max_tokens=4096, timeout=180, max_turns=12):
-        """One logical turn that may call tools on remote MCP servers.
-
-        mcp_servers = [{"type":"url","url":...,"name":...,"authorization_token":...}].
-        Tool calls execute server-side; on a `pause_turn` stop_reason we resend the
-        accumulated assistant content to continue (bounded by max_turns). Returns
-        the parsed final text + usage (same shape as complete()).
-        """
-        body = {
-            "model": model or self.model,
-            "max_tokens": max_tokens,
-            "system": system,
-            "messages": [{"role": "user", "content": user}],
-            "mcp_servers": mcp_servers,
-        }
-        headers = {"anthropic-beta": MCP_CONNECTOR_BETA}
-        payload = self._post(body, timeout=timeout, extra_headers=headers)
-        turns = 1
-        while payload.get("stop_reason") == "pause_turn" and turns < max_turns:
-            body["messages"].append({"role": "assistant", "content": payload.get("content", [])})
-            payload = self._post(body, timeout=timeout, extra_headers=headers)
-            turns += 1
-        return parse_message(payload)
 
     # ---- Message Batches API ----------------------------------------------
     def create_batch(self, requests):
