@@ -70,8 +70,11 @@ HeyReach (LinkedIn, deferred).
   merge to `main` → Railway auto-deploys.
 - Env vars live in Railway service variables in prod, `.env` locally. `.env.example`
   documents all of them. **`.env.defaults`** (committed, non-secret only) is copied to
-  `/app/.env` in the image: every loader is setdefault-style, so a Railway variable
-  always overrides it — put image-wide defaults there instead of in Railway.
+  `/app/.env` in the image and loaded into `os.environ` at boot (`load_env_file()` in
+  `app.py` main — the per-client loaders are lazy, and several loops read `os.environ`
+  directly). Setdefault-style, so a Railway variable always overrides it — put
+  image-wide defaults there instead of in Railway. Shell (`docker-entrypoint.sh`)
+  never sees it, so `PURGE_DATA_ON_BOOT` stays a Railway-only switch.
 
 ## Data stores
 
