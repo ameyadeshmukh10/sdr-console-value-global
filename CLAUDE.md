@@ -290,9 +290,9 @@ triggers, via the Anthropic Messages API + server-side `web_search` (the same ch
 - **Composite signal (2026-09):** when a scan FOUND ≥1 trigger, `detect_and_store` makes
   one extra no-web-search call (`compose_signal`) that synthesizes the verdicts + tech/
   hiring context (re-read fresh post-scan) into the account's top-line `signal`. Stored
-  via **`upsert_composite_signal` — fill-only**: a fresh (<90d) generation-researched
-  signal always wins, `company_name` is never touched, `has_recent` derives from
-  non-proxy triggers. **Deliberate consequence:** the fresh `researched_at` makes
+  via **`upsert_composite_signal` — fill-only**: a fresh (<90d) researched EVENT
+  (`signal_kind='news'`) always wins, a company profile never blocks it, `company_name` is
+  never touched, `has_recent` derives from non-proxy triggers. **Deliberate consequence:** the fresh `researched_at` makes
   `generate_batch`'s default/SLA path reuse the composite as cached research (no new
   web search) for 90 days — the composite prompt therefore writes neutral factual
   research prose, never SDR meta-commentary; the erp-trigger path is unaffected.
@@ -301,9 +301,17 @@ triggers, via the Anthropic Messages API + server-side `web_search` (the same ch
   `NEWS_COMPOSITE_SIGNAL=0` kills it. **UI Refresh on a found-trigger account
   re-composes** (`recompose_domain`, overwrite via compare-and-swap on the
   pre-compose snapshot, no web search) instead of the
-  research-only refresh, whose generic "company anchor -" line once clobbered a
+  research-only refresh, whose generic company line once clobbered a
   trigger composite (2026-10); a compose failure keeps the old signal. Repair any
-  clobbered rows with `--recompose --replace-generic [--dry-run]`. Both prompts anchor today's date (UTC — matches
+  clobbered rows with `--recompose --replace-generic [--dry-run]`.
+- **Signal kinds (2026-10):** `account_signals.signal_kind` = `news` (dated event) |
+  `profile` (plain company description, written as one sentence starting with the verified
+  company name — "AlixPartners is a global consulting firm …"; the research-only refresh
+  and the default/SLA path write these) | `composite`. `batch_db.is_generic_signal(signal,
+  kind)` is the ONE generic test; new signals carry no text markers. Existing rows are NOT
+  migrated: they keep `signal_kind` NULL and their old "company anchor - …" / "role anchor
+  - …" / "no recent signal …" text until re-researched, and `is_generic_signal` judges a
+  NULL-kind row by that legacy marker so they still never block a trigger composite. Both prompts anchor today's date (UTC — matches
   the stored clocks) and forbid adopting a stale source's tense (a past "projected
   go-live" is a completed event — the 2026-09 date-reasoning fix).
 - **Verdict guards (`_apply_verdict_guards`):** deterministic backstops after

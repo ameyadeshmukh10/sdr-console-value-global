@@ -3791,7 +3791,7 @@ def do_refresh_signal(domain, company=None):
     res = None
     # An account whose news scan FOUND a trigger refreshes by re-composing from
     # the stored verdicts — the research-only refresh would overwrite that
-    # trigger-anchored signal with a generic "company anchor" line.
+    # trigger-anchored signal with a generic company-profile line.
     if _news_status()[0]:
         import news_signals as N  # noqa: E402
         if N.has_found_triggers(domain):
