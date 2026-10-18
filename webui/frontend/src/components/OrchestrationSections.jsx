@@ -5,7 +5,7 @@ import { BRAND, PERSONA_COLORS } from '../theme.js'
 
 // "Under the hood" cards for the Orchestration view. Every section renders the
 // LIVE config from /api/orchestration/config (agent md files, buyer_group.py,
-// signal constant sets) — nothing here is hand-maintained copy. A null section
+// signal constant sets, news-trigger briefs) — nothing here is hand-maintained copy. A null section
 // (source file missing / parse failure) degrades to a one-line note.
 
 const PLAYBOOK_TONE = {
@@ -196,11 +196,11 @@ export function SequencingSection({ data }) {
         <div key={t.key} className="kv"><div className="mono muted" style={{ fontSize: 12 }}>{t.key}</div><div style={{ fontSize: 13 }}>{t.desc}</div></div>
       ))}
 
-      <div className="section-h">CTA / offer library (the give is delivered ON a meeting)</div>
+      <div className="section-h">CTA / offer library</div>
       {['tier_a', 'tier_b'].map((tier) => (
         <div key={tier} style={{ marginBottom: 8 }}>
           <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
-            {tier === 'tier_a' ? 'Tier A — product-as-the-give' : 'Tier B — analysis / teardown gives'}
+            {lib[`${tier}_label`] || (tier === 'tier_a' ? 'Tier A' : 'Tier B')}
           </div>
           {(lib[tier] || []).map((o) => (
             <div key={o.n} style={{ fontSize: 13, marginBottom: 6 }}>
@@ -266,9 +266,36 @@ export function GuardrailsSection({ data }) {
   )
 }
 
+function NewsTrigger({ t, defaultModel }) {
+  return (
+    <div style={{ padding: '8px 0', borderTop: '1px solid var(--border)', opacity: t.enabled ? 1 : 0.55 }}>
+      <div className="row" style={{ gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+        <b>{t.label}</b>
+        <span className="muted" style={{ fontSize: 12 }}>
+          wave {t.wave} · up to {t.max_searches} web searches
+          {t.model && t.model !== defaultModel && <> · model {t.model}</>}
+          {!t.enabled && <span style={{ color: BRAND.amber }}> · off (not in NEWS_TRIGGERS)</span>}
+        </span>
+      </div>
+      <div style={{ fontSize: 12.5, marginTop: 2 }}>{t.title}</div>
+      {t.why && <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>Why it matters: {t.why}</div>}
+      {t.guards.length > 0 && (
+        <ChipRow>{t.guards.map((g) => <Chip key={g} label={g} color={BRAND.violet} />)}</ChipRow>
+      )}
+      {t.scoring && <div style={{ fontSize: 12, marginTop: 4 }}><b>Scoring:</b> {t.scoring}</div>}
+      {t.disqualifiers && (
+        <div style={{ fontSize: 12, marginTop: 2 }}>
+          <b style={{ color: BRAND.red }}>Not a hit:</b> {t.disqualifiers}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function SignalsSection({ data }) {
   const tech = data?.tech
   const hiring = data?.hiring
+  const news = data?.news
   return (
     <>
       <div className="section-h" style={{ marginTop: 0 }}>
@@ -324,6 +351,25 @@ export function SignalsSection({ data }) {
             ...hiring.include.flatMap((g) => g.chips.map((c) => ({ label: 'include', raw: c.raw }))),
             ...hiring.exclude.map((c) => ({ label: 'exclude', raw: c.raw })),
           ]} />
+        </>
+      )}
+
+      <div className="section-h">
+        Company news — the five ERP buying triggers
+        {news && <span className="muted" style={{ textTransform: 'none', letterSpacing: 0 }}>
+          {' '}· web research per trigger · cached {news.refresh_days} days · model {news.default_model || 'default'}
+          {news.composite ? ' · found triggers feed a composite signal' : ''}
+          {!news.available && <span style={{ color: BRAND.amber }}> · currently unavailable: {news.reason}</span>}
+          {news.scope_error && <span style={{ color: BRAND.red }}> · {news.scope_error}</span>}
+        </span>}
+      </div>
+      {!news ? <Unavailable what="The news-trigger briefs" /> : (
+        <>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+            Wave 2 triggers run after wave 1 so they can cross-check its verdicts. A hit opens email 1
+            for contacts approved through that trigger's segment.
+          </div>
+          {news.triggers.map((t) => <NewsTrigger key={t.id} t={t} defaultModel={news.default_model} />)}
         </>
       )}
     </>

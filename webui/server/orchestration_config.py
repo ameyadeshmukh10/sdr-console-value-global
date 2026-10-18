@@ -2,13 +2,13 @@
 
 Assembles GET /api/orchestration/config from the pipeline's REAL sources —
 agent markdown, knowledge base, buyer_group.py, hiring/tech constant sets, the
-technographic selection JSON — so the page always shows what the pipeline
+technographic selection JSON, the five news-trigger briefs — so the page always shows what the pipeline
 actually runs (no hand-maintained copy to drift).
 
 Contract: `orchestration_config_payload()` NEVER raises. Each section is built
 independently; a failed section comes back null with its message under
 `errors[<section>]` and the rest still render. All parsing is stdlib; the
-pipeline modules it imports (tech_signals, hiring_signals, generate_batch,
+pipeline modules it imports (tech_signals, hiring_signals, news_signals, generate_batch,
 buyer_group, lint_sequence) are stdlib-only at import time per the repo's boot
 rule, and every import here is wrapped anyway.
 """
@@ -336,6 +336,10 @@ def _sequencing_section(root):
         "linkedin_touches": linkedin,
         "cadence": [_strip_md(b) for b in _bullets(_section(cta, "Cadence placement"))],
         "cta_library": {"tier_a": _tier_items(tier_a), "tier_b": _tier_items(tier_b),
+                        # headings straight from cta-offers.md so the UI never
+                        # describes a different offer strategy than the doc
+                        "tier_a_label": tier_a.splitlines()[0].strip() if tier_a else "",
+                        "tier_b_label": tier_b.splitlines()[0].strip() if tier_b else "",
                         "anti_patterns": [_strip_md(b) for b in _bullets(anti)]},
         "variants": variants,
     }
@@ -503,6 +507,74 @@ def _hiring_signals_section(root):
     }
 
 
+def _brief_parts(brief):
+    """Slice the operator-readable bits out of a trigger brief: the heading,
+    the "Why it matters" rationale, the scoring rule and the disqualifiers.
+    Each is a paragraph in the brief; a missing one comes back ''."""
+    paras = [" ".join(l.strip() for l in p.splitlines()) for p in brief.strip().split("\n\n")]
+    title = re.sub(r"^#\s*(Trigger:\s*)?", "", brief.strip().splitlines()[0]).strip()
+    why = scoring = disq = ""
+    for p in paras:
+        m = re.search(r"Why it matters \(context only[^)]*\):\s*(.+)", p)
+        if m and not why:
+            # stop before any research instruction sharing the paragraph
+            why = re.split(r"(?<=\.)\s+(?=Look for|Research|Search)", m.group(1))[0].strip()
+        if "Scoring:" in p and not scoring:
+            scoring = p.split("Scoring:", 1)[1].split("DISQUALIFIERS", 1)[0].strip()
+        if "DISQUALIFIERS" in p and not disq:
+            disq = re.sub(r"^\s*\([^)]*\):\s*", "", p.split("DISQUALIFIERS", 1)[1]).strip()
+    return {"title": title, "why": why, "scoring": scoring, "disqualifiers": disq}
+
+
+def _news_signals_section(root):
+    import news_signals as N
+    try:
+        available, reason = N.news_available()
+    except Exception as e:  # noqa: BLE001
+        available, reason = False, str(e)
+    try:
+        enabled = set(N.enabled_triggers())
+        scope_error = None
+    except ValueError as e:  # bad NEWS_TRIGGERS — the scan would refuse too
+        enabled, scope_error = set(), str(e)
+    wave_of = {t: i + 1 for i, wave in enumerate(N.TRIGGER_WAVES) for t in wave}
+    default_model = ((os.environ.get("NEWS_MODEL") or "").strip()
+                     or (os.environ.get("CLAUDE_MODEL") or "").strip() or None)
+    if not default_model:
+        try:
+            from anthropic_client import DEFAULT_MODEL  # stdlib-only module
+            default_model = DEFAULT_MODEL
+        except Exception:  # noqa: BLE001
+            pass
+    triggers = []
+    for tid, spec in N.TRIGGERS.items():
+        guards = []
+        if spec.get("requires_ebs"):
+            guards.append("runs only when the tech scan detected Oracle EBS")
+        if spec.get("recent_window_days"):
+            guards.append(f"{spec['recent_window_days']}-day recency window")
+        if spec.get("min_found_score"):
+            guards.append(f"found only at score ≥ {spec['min_found_score']}")
+        if spec.get("max_found_score"):
+            guards.append(f"score capped at {spec['max_found_score']}")
+        if spec.get("context_from"):
+            guards.append(f"cross-checks the {N.TRIGGERS[spec['context_from']]['label']} verdict")
+        triggers.append({
+            "id": tid, "label": spec["label"], "enabled": tid in enabled,
+            "wave": wave_of.get(tid), "max_searches": N._max_searches(tid),
+            "model": N._trigger_model(tid) or default_model,
+            "guards": guards, **_brief_parts(spec["brief"]),
+        })
+    return {
+        "available": available, "reason": None if available else reason,
+        "scope_error": scope_error,
+        "refresh_days": int(float(os.environ.get("NEWS_REFRESH_DAYS") or 30)),
+        "default_model": default_model,
+        "composite": N._flag("NEWS_COMPOSITE_SIGNAL", True),  # same parse as the scanner
+        "triggers": triggers,
+    }
+
+
 # ---- payload -----------------------------------------------------------------
 def orchestration_config_payload(root=None):
     root = Path(root) if root else PROJECT_ROOT
@@ -533,6 +605,11 @@ def orchestration_config_payload(root=None):
     except Exception as e:  # noqa: BLE001
         signals["hiring"] = None
         errors["signals.hiring"] = str(e)
+    try:
+        signals["news"] = _news_signals_section(root)
+    except Exception as e:  # noqa: BLE001
+        signals["news"] = None
+        errors["signals.news"] = str(e)
     payload["signals"] = signals
 
     payload["errors"] = errors
