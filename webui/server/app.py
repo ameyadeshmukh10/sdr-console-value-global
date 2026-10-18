@@ -61,7 +61,6 @@ DB_PATH = DATA / "outreach" / "pipeline.db"
 GEN_DIR = DATA / "outreach" / "generated"
 CONTACTS_JSONL = DATA / "outreach" / "contacts.jsonl"
 CAMPAIGN_STATS = DATA / "campaign-stats"
-ENV_PATH = PROJECT_ROOT / ".env"
 
 SCRIPTS = PROJECT_ROOT / ".claude" / "skills"
 HUBSPOT_PULL = SCRIPTS / "sdr-pipeline" / "scripts" / "hubspot_pull.py"
@@ -174,27 +173,8 @@ def derive_cta(asset):
     return "unknown"
 
 
-# ----------------------------------------------------------------------------
-# Tiny .env reader (no python-dotenv dependency).
-# ----------------------------------------------------------------------------
-def read_env():
-    """Config the web UI reads (campaign IDs, HeyReach config, …). Merges the .env file
-    (local dev) with the process environment (Railway/Docker, where there is NO .env file —
-    config is injected as real env vars). The process environment wins, so host-provided
-    config is always honored even when ENV_PATH is absent."""
-    import os
-    env = {}
-    if ENV_PATH.is_file():
-        for line in ENV_PATH.read_text().splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, val = line.partition("=")
-            # strip inline comments + surrounding quotes/whitespace
-            val = val.split("#", 1)[0].strip().strip('"').strip("'")
-            env[key.strip()] = val
-    env.update(os.environ)
-    return env
+# .env handling (ENV_PATH, boot loading, settings log, read_env) lives in env_config.
+from env_config import load_env_file, log_settings, read_env  # noqa: E402  (stdlib, no I/O at import)
 
 
 # ----------------------------------------------------------------------------
@@ -918,9 +898,11 @@ def linkedin_analytics_payload():
 # Subprocess helpers.
 # ----------------------------------------------------------------------------
 def run_script(args, timeout=600):
+    # env=read_env(): fresh .env values (boot-loaded copies in os.environ go stale
+    # when the file is rewritten), host overrides still win.
     proc = subprocess.run(
         [sys.executable, *args],
-        cwd=str(PROJECT_ROOT),
+        cwd=str(PROJECT_ROOT), env=read_env(),
         capture_output=True, text=True, timeout=timeout,
     )
     return {"returncode": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
@@ -931,7 +913,7 @@ def run_script_streaming(args, on_stderr_line=None, timeout=3600):
     (subprocess.run buffers until exit). stdout is still captured whole for the
     final JSON summary. Returns the same {returncode, stdout, stderr} shape."""
     proc = subprocess.Popen(
-        [sys.executable, *args], cwd=str(PROJECT_ROOT),
+        [sys.executable, *args], cwd=str(PROJECT_ROOT), env=read_env(),
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
     out_chunks, err_chunks = [], []
 
@@ -5709,6 +5691,8 @@ def _aisdr_sync_loop():
 
 def main():
     import os
+    load_env_file()  # before any loop/env read — see load_env_file()
+    log_settings()
     # $PORT is injected by hosting platforms (Railway); --port overrides for local runs.
     port = int(os.environ.get("PORT", "8787"))
     # Bind localhost for local dev (safe), but all interfaces when a platform sets $PORT

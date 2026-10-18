@@ -69,7 +69,14 @@ HeyReach (LinkedIn, deferred).
   click-by-click instructions or ask for a project token. Code changes ship via GitHub →
   merge to `main` → Railway auto-deploys.
 - Env vars live in Railway service variables in prod, `.env` locally. `.env.example`
-  documents all of them.
+  documents all of them. **`.env.defaults`** (committed, non-secret only) is copied to
+  `/app/.env` in the image and loaded into `os.environ` at boot (`load_env_file()`,
+  called first in `app.py` main — the per-client loaders are lazy, and several loops
+  read `os.environ` directly). All of the console's .env handling lives in
+  `webui/server/env_config.py`; `log_settings()` prints every setting at boot with its
+  source (`env` / `.env` / unset), secrets masked. Setdefault-style, so a Railway variable always overrides it — put
+  image-wide defaults there instead of in Railway. Shell (`docker-entrypoint.sh`)
+  never sees it, so `PURGE_DATA_ON_BOOT` stays a Railway-only switch.
 
 ## Data stores
 
@@ -250,9 +257,10 @@ triggers, via the Anthropic Messages API + server-side `web_search` (the same ch
   its found verdicts in the weak 30-54 one-proxy band, pure segment filler.
 - **Model resolution (2026-09 cost lesson, load-bearing):** per trigger,
   `NEWS_MODEL_<TRIGGER_ID>` env → `TRIGGERS[..]["model"]` → `NEWS_MODEL` →
-  `CLAUDE_MODEL` → the client default `claude-opus-4-8`. **The first full run burned
-  Opus 4.8 rates ($5/$25 per MTok) on all 1,262 accounts because nothing was set** —
-  `NEWS_MODEL=claude-sonnet-5` ($2/$10) is now a Railway service variable (2026-09-10).
+  `CLAUDE_MODEL` → the client default (`claude-opus-5-5` since 2026-10). **The first
+  full run burned Opus 4.8 rates ($5/$25 per MTok) on all 1,262 accounts because nothing
+  was set** — `NEWS_MODEL=claude-sonnet-5-5` ($2/$10) is baked into the image via
+  `.env.defaults` (2026-10; a Railway service variable of the same name still wins).
   Test cheaper tiers per trigger without code changes, e.g.
   `NEWS_MODEL_LICENSE_AUDIT=claude-haiku-4-5`; `NEWS_COMPOSITE_MODEL` scopes the
   composite-signal call. `_client()` keeps one cached client per model.

@@ -182,7 +182,7 @@ def build_system(fewshot):
 def classify_one(client, system, text):
     try:
         res = client.complete(system, f"REPLY:\n{text}\n\nLABEL:", use_web_search=False,
-                              max_tokens=300)
+                              max_tokens=600)
         data = extract_json(res["text"])
         intent = str(data.get("intent", ""))
         interested = bool(data.get("interested"))

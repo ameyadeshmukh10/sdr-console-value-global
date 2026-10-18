@@ -1,10 +1,10 @@
 """Drive Clay's MCP server from the backend (no Claude Code) to source a company
 list's buying group, then emit candidate contacts for source_contacts.py.
 
-This replaces the *interactive* Clay step of the clay-sourcing skill. It uses the
-Anthropic Messages API MCP connector with a cheap model (Haiku by default) to
-operate Clay's async `find-and-enrich-contacts-at-company` + `get-task-context`
-tools, and orchestrates the polling cadence here in Python.
+This replaces the *interactive* Clay step of the clay-sourcing skill. It calls
+Clay's async `find-and-enrich-contacts-at-company` + `get-task-context` tools over
+a direct MCP session (clay_mcp.ClayMCP — no LLM in the loop) and orchestrates the
+polling cadence here in Python.
 
   python3 clay_enrich.py --list-id <company_list_id> [--cap 25] --out candidates.json
 
@@ -12,8 +12,7 @@ Output file: a JSON list of {first_name,last_name,title,email,company,domain,
 linkedin_url} — exactly the shape source_contacts.py:normalize() accepts. A short
 summary JSON is printed to stdout; per-domain progress goes to stderr.
 
-Env: ANTHROPIC_API_KEY, HUBSPOT_ACCESS_TOKEN, plus a connected Clay OAuth session
-(see clay_oauth.py). Model override: CLAUDE_SOURCING_MODEL (default claude-haiku-4-5).
+Env: HUBSPOT_ACCESS_TOKEN, plus a connected Clay OAuth session (see clay_oauth.py).
 """
 
 import argparse

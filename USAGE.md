@@ -275,8 +275,8 @@ in 24h (`--sync` or `NEWS_BATCH=0` forces synchronous). Submitted batch ids pers
 A full scan is 3-4 web-search calls per trigger (per-trigger
 caps tuned from live data; `NEWS_MAX_SEARCHES` overrides) — prefer `--limit` on a
 first bulk backfill, or scope with `--triggers` / `NEWS_TRIGGERS`. The model comes
-from `NEWS_MODEL` (set to `claude-sonnet-5` in prod — unset it falls through to the
-pricey `claude-opus-4-8` client default), with per-trigger overrides via
+from `NEWS_MODEL` (`claude-sonnet-5-5` via `.env.defaults` in the image — unset it falls through to the
+pricier `claude-opus-5-5` client default), with per-trigger overrides via
 `NEWS_MODEL_<TRIGGER_ID>` (e.g. `NEWS_MODEL_LICENSE_AUDIT=claude-haiku-4-5`).
 When a scan finds ≥1 trigger, a composite best-angle `signal` is synthesized into the
 account's top-line Signal field (`NEWS_COMPOSITE_SIGNAL=0` disables).

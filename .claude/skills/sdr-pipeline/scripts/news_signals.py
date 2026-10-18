@@ -104,7 +104,7 @@ AI_SDR_SCRIPTS = HERE.parents[1] / "ai-sdr" / "scripts"      # anthropic_client
 NO_NEWS = "No ERP news signals detected"
 NEWS_PROPERTY = "erp_news_signals"
 NEWS_PROPERTY_LABEL = "ERP News Signals"
-MAX_TOKENS = 1500        # a verdict is small; searching happens server-side
+MAX_TOKENS = 3000        # verdict is small, but thinking shares this cap; searching is server-side
 CALL_TIMEOUT = 300       # seconds per trigger call (web search rounds are slow)
 HEADLINE_MAX = 300       # chars kept from a model headline (word-boundary + ellipsis)
 LINE_HEADLINE_MAX = 100  # chars of headline shown in the news_signals line
@@ -631,7 +631,7 @@ def compose_signal(company, domain, trigger_results, tech_line=None, hiring_line
             COMPOSITE_SYSTEM.format(today=_utcnow().strftime("%B %d, %Y")),
             build_composite_user(company, domain, trigger_results,
                                  tech_line=tech_line, hiring_line=hiring_line),
-            max_tokens=400, timeout=120,
+            max_tokens=800, timeout=120,
         )
         if res.get("stop_reason") == "max_tokens":
             # A mid-sentence fragment must never become the account's signal.
