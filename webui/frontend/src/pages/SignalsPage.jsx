@@ -236,7 +236,7 @@ export default function SignalsPage() {
   return (
     <div>
       <h1 className="page-title">Signals</h1>
-      <p className="page-sub">Per-company research cache. Fresh entries (&lt;90 days) are reused, so the AI SDR skips the web search. Tech = detected stack from a website + DNS scan. Hiring = open roles from a live job-postings lookup (sales roles feed email 2). News = web-researched ERP triggers (M&amp;A carve-out, ERP migration, license audit, EBS on OCI, EBS performance; 30-day cache).</p>
+      <p className="page-sub" style={{ maxWidth: 'none' }}>Per-company research cache. Fresh entries (&lt;90 days) are reused, so the AI SDR skips the web search. Tech = detected stack from a website + DNS scan. Hiring = open roles from a live job-postings lookup (sales roles feed email 2). News = web-researched ERP triggers (M&amp;A carve-out, ERP migration, license audit, EBS on OCI, EBS performance; 30-day cache).</p>
 
       <ErrorBanner error={error} />
 
