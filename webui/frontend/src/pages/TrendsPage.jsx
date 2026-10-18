@@ -61,6 +61,7 @@ export default function TrendsPage() {
   const cohorts = data?.cohorts
   const when = data?.fetched_at ? new Date(data.fetched_at).toLocaleString() : '—'
   const varSort = useSort(variants?.variants)
+  const trackSort = useSort(variants?.tracks)
   const convSort = useSort(conv?.by_campaign)
 
   const convChart = (conv?.by_campaign || []).map((c) => ({
@@ -112,6 +113,37 @@ export default function TrendsPage() {
             Interested = an enrolled contact whose email shows up in the interested set. Pre-variant
             contacts count as the <b>value-give</b> baseline. Run <b>earn</b> / <b>show</b> batches from
             the Pipeline tab to populate the other arms.
+          </p>
+        </div>
+      )}
+
+      {variants?.tracks?.length > 0 && (
+        <div className="panel" style={{ marginBottom: 22 }}>
+          <div className="section-h" style={{ marginTop: 0 }}>By messaging track</div>
+          <table>
+            <thead><tr>
+              <SortTh label="Track" k="track" sort={trackSort.sort} onSort={trackSort.onSort} />
+              <SortTh label="Contacts" k="total" sort={trackSort.sort} onSort={trackSort.onSort} />
+              <SortTh label="Enrolled" k="enrolled" sort={trackSort.sort} onSort={trackSort.onSort} />
+              <SortTh label="Interested" k="interested" sort={trackSort.sort} onSort={trackSort.onSort} />
+              <SortTh label="Interested rate" k="interested_rate_pct" sort={trackSort.sort} onSort={trackSort.onSort} />
+            </tr></thead>
+            <tbody>
+              {trackSort.rows.map((t) => (
+                <tr key={t.track}>
+                  <td><span className="badge cta">{t.track.replace('_', ' ')}</span></td>
+                  <td>{num(t.total)}</td>
+                  <td>{num(t.enrolled)}</td>
+                  <td>{num(t.interested)}</td>
+                  <td><b>{t.interested_rate_pct == null ? '—' : t.interested_rate_pct + '%'}</b></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+            Retirement and data split are the M&amp;A / ERP-switch tracks; archiving is the staying-on-the-ERP
+            pitch (incl. all non-trigger copy). <b>Held</b> contacts were stopped by a send gate; <b>unrouted</b> is
+            trigger copy written before routing existed. Interested = an enrolled contact in the interested set.
           </p>
         </div>
       )}

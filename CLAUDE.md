@@ -427,6 +427,20 @@ application-**retirement** pitch, never the staying-on-EBS archiving pain.
   openers, and retirement vocabulary/licensing/sample-report on LinkedIn. The news +
   composite prompts forbid naming an unconfirmed ERP and "clock started at announcement".
 
+## Routing review + track reporting (feedback section 7, added 2026-10)
+
+- **Review (7.4):** `outreach_detail` returns `track`, `route`, `held_reason`; the
+  Outreach detail shows a **Routing** panel (track, deal side, entity, new ERP, old
+  system, licensing, closed, basis, reason). Index rows carry `track`.
+- **Reporting (7.5):** `contacts.track` (additive migration) is stamped by `cmd_ingest`
+  from the asset (`archiving` for non-trigger copy). `track_breakdown()` rides on
+  `GET /api/variants` as `tracks` → Trends "By messaging track" (contacts / enrolled /
+  interested). Rows ingested before the column derive `archiving` / `unrouted`.
+  **Booked meetings are NOT recorded locally** (no CRM; `ai_sdr_meeting_booked` lives only
+  in the dormant HubSpot/Mongo attribution), so the split is by interested replies.
+- **Known gap:** regeneration never clears `approved_at` (nor skips `enrolled` contacts) —
+  regenerated gated copy stays enroll-eligible without a fresh review.
+
 ## Agent studio — editable instructions (Orchestration view, added 2026-09)
 
 The Orchestration view is the operator's editing surface for how the AI SDR thinks:

@@ -544,6 +544,7 @@ class OutreachIndex:
                         "batch_id": dbm.get("batch_id"),
                         "gated": bool(dbm.get("gated")),
                         "segment": dbm.get("segment") or asset.get("segment") or "",
+                        "track": asset.get("track") or "",
                         "approved": bool(dbm.get("approved_at")),
                         "edited": bool(asset.get("edited_at")),
                         "country": dbm.get("country") or "",
@@ -794,6 +795,11 @@ def outreach_detail(contact_id):
         "account_signal": account_signal,
         "cta_type": derive_cta(asset),
         "variant": asset.get("variant") or dbm.get("variant") or "",
+        # feedback 7.4: the routing decision (track, deal side, new ERP, old
+        # system, licensing, basis, reason) so the client can review it
+        "track": asset.get("track") or "",
+        "route": asset.get("route") or None,
+        "held_reason": asset.get("held_reason") or "",
         "edited_at": asset.get("edited_at"),
         "email": asset.get("email", {}),
         "linkedin": asset.get("linkedin", {}),
@@ -4822,7 +4828,45 @@ def variant_breakdown():
         den = a["enrolled"] or a["total"]
         out.append({"variant": v, **a,
                     "interested_rate_pct": round(100 * a["interested"] / den, 3) if den else None})
-    return {"variants": out, "interested_total": len(interested)}
+    return {"variants": out, "tracks": track_breakdown(interested),
+            "interested_total": len(interested)}
+
+
+TRACK_ORDER = ["retirement", "data_split", "archiving", "hold", "unrouted"]
+
+
+def track_breakdown(interested=None):
+    """Feedback 7.5: outcomes per messaging track. contacts.track is stamped at
+    ingest; rows ingested before it existed derive it (non-trigger copy is the
+    archiving pitch; pre-routing trigger copy is 'unrouted'). Interested
+    replies are the outcome measured locally — booked meetings are not recorded
+    in the console (no CRM), so they cannot be split here yet."""
+    interested = _interested_emails() if interested is None else interested
+    try:
+        with db_connect() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(contacts)")}
+            tcol = "track" if "track" in cols else "NULL"
+            rows = conn.execute(
+                f"SELECT {tcol} track, variant, status, email FROM contacts "
+                f"WHERE status IN ('generated','enrolled','skipped','failed')").fetchall()
+    except sqlite3.Error:
+        return []
+    agg = {}
+    for r in rows:
+        t = r["track"] or ("unrouted" if r["variant"] == ERP_VARIANT else "archiving")
+        a = agg.setdefault(t, {"total": 0, "enrolled": 0, "interested": 0})
+        a["total"] += 1
+        if r["status"] == "enrolled":
+            a["enrolled"] += 1
+            if (r["email"] or "").strip().lower() in interested:
+                a["interested"] += 1
+    out = []
+    for t in TRACK_ORDER + [k for k in agg if k not in TRACK_ORDER]:
+        if t in agg:
+            a = agg[t]
+            out.append({"track": t, **a, "interested_rate_pct":
+                        round(100 * a["interested"] / a["enrolled"], 3) if a["enrolled"] else None})
+    return out
 
 
 def do_generate_samples(company=None, domain=None, from_email=None):

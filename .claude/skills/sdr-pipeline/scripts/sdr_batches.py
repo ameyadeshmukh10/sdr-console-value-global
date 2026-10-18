@@ -99,6 +99,13 @@ def cmd_ingest(args):
             continue
         try:
             asset = json.loads(p.read_text())
+            # reporting dimension (feedback 7.5): retirement / data_split /
+            # archiving / hold; non-trigger copy is the archiving pitch
+            track = asset.get("track") or ("archiving" if asset.get("variant") != G.ERP_VARIANT
+                                           else None)
+            conn.execute("UPDATE contacts SET track=? WHERE contact_id=?",
+                         (track, r["contact_id"]))
+            conn.commit()
             if asset.get("held"):  # routing held the account (e.g. separate unit)
                 reason = (asset.get("held_reason")
                           or f"held: {(asset.get('route') or {}).get('reason') or 'by routing'}")
