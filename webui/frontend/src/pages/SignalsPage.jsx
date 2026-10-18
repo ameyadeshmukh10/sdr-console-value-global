@@ -17,6 +17,24 @@ import { buildSignalReport } from '../components/signalReport.js'
 const NO_TECH = 'No signals detected'
 const NO_HIRING = 'No open roles detected'
 const NO_NEWS = 'No ERP news signals detected'
+const SEARCH_MIN = 3
+
+// The text each table column displays for a row (mirrors the cell rendering
+// below), so the search matches what the operator actually sees.
+function rowSearchText(s) {
+  const cell = (val, none, failed, err) =>
+    val && val !== none ? val : val === none ? failed[0] : err ? failed[1] : ''
+  return [
+    s.domain,
+    s.company_name,
+    s.trigger_label || (s.news_age_days != null ? 'none' : 'not researched'),
+    s.signal,
+    cell(s.tech_signals, NO_TECH, ['no ERP detected', 'scan failed'], s.tech_error),
+    cell(s.hiring_signals, NO_HIRING, ['none detected', 'scan failed'], s.hiring_error),
+    cell(s.news_signals, NO_NEWS, ['none found', 'research failed'], s.news_error),
+    s.age_days == null ? '' : `${s.age_days}d`,
+  ].join('\n').toLowerCase()
+}
 
 export default function SignalsPage() {
   const [data, setData] = useState(null)
@@ -30,6 +48,7 @@ export default function SignalsPage() {
   const [hiringJob, setHiringJob] = useState(null)
   const [newsJob, setNewsJob] = useState(null)
   const [openDomain, setOpenDomain] = useState(null)
+  const [query, setQuery] = useState('')
 
   function load() {
     api.signals().then((d) => { setData(d); setError(null) }).catch((e) => setError(e.message))
@@ -181,9 +200,15 @@ export default function SignalsPage() {
   }, [newsJob?.job_id, newsJob?.status])
 
   const signals = useMemo(() => data?.signals || [], [data])
+  // Client-side search over every shown column, active from SEARCH_MIN chars.
+  const q = query.trim().toLowerCase()
+  const searching = q.length >= SEARCH_MIN
+  const filtered = useMemo(
+    () => (searching ? signals.filter((s) => rowSearchText(s).includes(q)) : signals),
+    [signals, searching, q])
   // Client-side sort (the list is returned unpaginated); click cycles
   // ascending → descending → server order, blanks always last.
-  const { rows: sorted, sort, onSort: toggleSort } = useSort(signals)
+  const { rows: sorted, sort, onSort: toggleSort } = useSort(filtered)
   const fresh = signals.filter((s) => s.fresh).length
   const withTrigger = signals.filter((s) => s.trigger).length
   const scanned = signals.filter((s) => s.tech_age_days != null).length
@@ -278,11 +303,23 @@ export default function SignalsPage() {
         <div className="empty">No cached signals yet. They populate as you generate batches.</div>
       ) : (
         <>
-        {(selected.size > 0 || selJob) && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
+        {/* One toolbar: search on the left; counts, bulk actions on the checked
+            rows and their job progress on the right. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
+          <input type="search" placeholder="Search all columns (3+ characters)…" value={query}
+            onChange={(e) => setQuery(e.target.value)} aria-label="Search signals"
+            style={{ flex: '0 1 360px', minWidth: 200 }} />
+          {!searching && q.length > 0 && (
+            <span className="muted" style={{ fontSize: 13 }}>Type at least {SEARCH_MIN} characters</span>
+          )}
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13 }}>
+              <strong>{num(signals.length)}</strong> <span className="muted">signals</span>
+              {searching && <> · <strong>{num(sorted.length)}</strong> <span className="muted">filtered</span></>}
+              {selected.size > 0 && <> · <strong>{num(selected.size)}</strong> <span className="muted">checked</span></>}
+            </span>
             {selected.size > 0 && (
               <>
-                <span style={{ fontSize: 13, fontWeight: 600 }}>{num(selected.size)} selected</span>
                 <button className="ghost sm" disabled={selRunning} onClick={() => runSelected('refresh')}
                   title="Re-research the signal for each checked company">↻ Refresh</button>
                 <button className="ghost sm" disabled={selRunning || techOff} onClick={() => runSelected('detect')}
@@ -291,7 +328,8 @@ export default function SignalsPage() {
                   title="Download the full signal record of each checked company as JSON">
                   {exporting ? <Spinner /> : '⤓ Export'}
                 </button>
-                {!selRunning && <button className="ghost sm" onClick={() => setSelected(new Set())}>Clear</button>}
+                {!selRunning && <button className="ghost sm" onClick={() => setSelected(new Set())}
+                  title="Uncheck all selected companies">Uncheck</button>}
               </>
             )}
             {selJob && (
@@ -303,12 +341,14 @@ export default function SignalsPage() {
             )}
             {selRunning && <button className="ghost sm" onClick={() => { stopSel.current = true }}>Stop</button>}
           </div>
-        )}
+        </div>
         <div className="panel" style={{ padding: 0, overflowX: 'auto' }}>
           {/* table-layout:fixed makes these widths authoritative, so the long
               signal/tech/hiring/news text truncates instead of blowing the table
               wide. The table fits the viewport; minWidth only floors it on very
-              narrow windows, where the panel (not the page) scrolls. */}
+              narrow windows, where the panel (not the page) scrolls. News has no
+              width so it absorbs the leftover space — otherwise fixed layout
+              spreads it across every column, the 36px checkbox one included. */}
           <table className="dense" style={{ tableLayout: 'fixed', width: '100%', minWidth: 860 }}>
             <thead><tr>
               <th style={{ width: 36 }} onClick={(e) => e.stopPropagation()}>
@@ -322,7 +362,7 @@ export default function SignalsPage() {
               <SortTh label="Signal" k="signal" sort={sort} onSort={toggleSort} width="13%" />
               <SortTh label="Tech" k="tech_signals" sort={sort} onSort={toggleSort} width="12%" />
               <SortTh label="Hiring" k="hiring_signals" sort={sort} onSort={toggleSort} width="10%" />
-              <SortTh label="News" k="news_signals" sort={sort} onSort={toggleSort} width="15%" />
+              <SortTh label="News" k="news_signals" sort={sort} onSort={toggleSort} />
               <SortTh label="Age" k="age_days" sort={sort} onSort={toggleSort} width="5%" />
             </tr></thead>
             <tbody>
@@ -403,6 +443,11 @@ export default function SignalsPage() {
                   </td>
                 </tr>
               ))}
+              {sorted.length === 0 && (
+                <tr><td colSpan={9} className="muted" style={{ textAlign: 'center', padding: 24 }}>
+                  No companies match “{query.trim()}”.
+                </td></tr>
+              )}
             </tbody>
           </table>
         </div>

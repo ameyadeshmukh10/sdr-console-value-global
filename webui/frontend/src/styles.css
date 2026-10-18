@@ -97,6 +97,9 @@ a:hover { text-decoration: underline; }
 .stat-row { display: flex; flex-wrap: wrap; gap: 14px; }
 .stat-row > .stat { flex: 1 1 140px; min-width: 0; }
 .stat-row > .stat .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Labels wrap to 1 or 2 lines depending on tile width; reserving two lines keeps
+   every value in the row on the same baseline. */
+.stat-row > .stat .label { line-height: 1.4; min-height: 2.8em; }
 .stat { position: relative; overflow: hidden; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 20px; box-shadow: var(--shadow); }
 .stat.accent::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--cta); border-radius: 3px 0 0 3px; }
 .stat .label { color: var(--faint); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .7px; }
