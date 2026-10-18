@@ -898,9 +898,11 @@ def linkedin_analytics_payload():
 # Subprocess helpers.
 # ----------------------------------------------------------------------------
 def run_script(args, timeout=600):
+    # env=read_env(): fresh .env values (boot-loaded copies in os.environ go stale
+    # when the file is rewritten), host overrides still win.
     proc = subprocess.run(
         [sys.executable, *args],
-        cwd=str(PROJECT_ROOT),
+        cwd=str(PROJECT_ROOT), env=read_env(),
         capture_output=True, text=True, timeout=timeout,
     )
     return {"returncode": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
@@ -911,7 +913,7 @@ def run_script_streaming(args, on_stderr_line=None, timeout=3600):
     (subprocess.run buffers until exit). stdout is still captured whole for the
     final JSON summary. Returns the same {returncode, stdout, stderr} shape."""
     proc = subprocess.Popen(
-        [sys.executable, *args], cwd=str(PROJECT_ROOT),
+        [sys.executable, *args], cwd=str(PROJECT_ROOT), env=read_env(),
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
     out_chunks, err_chunks = [], []
 

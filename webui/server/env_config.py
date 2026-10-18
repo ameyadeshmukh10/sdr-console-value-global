@@ -24,12 +24,8 @@ _ENV_EXAMPLE_KEY_RE = re.compile(r"^#?\s*([A-Z][A-Z0-9_]+)=", re.M)
 
 
 def load_env_file() -> None:
-    """Copy ENV_PATH into os.environ at boot, setdefault-style (real env wins).
-
-    In the Docker image ENV_PATH is the baked-in .env.defaults, so its values must
-    reach the loops that read os.environ directly (AISDR_SYNC_ENABLED, the activity
-    autosyncs, …) and every run_script() subprocess — the per-client lazy loaders
-    only fire when a client is constructed."""
+    """Boot: copy ENV_PATH into os.environ (real env wins) so loops reading
+    os.environ directly see it."""
     for key, val in _parse_env_file().items():
         if key not in os.environ:
             os.environ[key] = val
@@ -37,10 +33,7 @@ def load_env_file() -> None:
 
 
 def log_settings() -> None:
-    """Print every app setting once at boot: effective value + source (env = host /
-    Railway variable, .env = ENV_PATH file, unset = code default). Secrets are masked.
-    Keys = everything .env.example documents + the .env file + any env var sharing a
-    documented prefix (catches undocumented Railway variables)."""
+    """Boot: print each setting with its source (env / .env / unset), secrets masked."""
     example = PROJECT_ROOT / ".env.example"
     documented: set[str] = set(_ENV_EXAMPLE_KEY_RE.findall(example.read_text())) if example.is_file() else set()
     file_keys = set(_parse_env_file())
@@ -65,12 +58,8 @@ def log_settings() -> None:
 
 
 def read_env() -> dict[str, str]:
-    """Config the web UI reads (campaign IDs, HeyReach config, …). Merges the .env file
-    (local dev; in the Docker image it is the baked-in .env.defaults) with the process
-    environment (Railway service variables). The process environment wins, so
-    host-provided config is always honored, and ENV_PATH may be absent. The file is
-    re-read on every call (scripts rewrite it, e.g. sdr_batches setup-campaigns), so
-    keys load_env_file() copied into os.environ don't shadow later edits."""
+    """Merged config: the .env file, re-read on every call, overlaid by real env vars
+    (host wins; boot-loaded copies don't shadow later file edits)."""
     env = _parse_env_file()
     env.update({k: v for k, v in os.environ.items() if k not in _DOTENV_KEYS})
     return env
