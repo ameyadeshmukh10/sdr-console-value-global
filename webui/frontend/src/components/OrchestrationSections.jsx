@@ -196,11 +196,11 @@ export function SequencingSection({ data }) {
         <div key={t.key} className="kv"><div className="mono muted" style={{ fontSize: 12 }}>{t.key}</div><div style={{ fontSize: 13 }}>{t.desc}</div></div>
       ))}
 
-      <div className="section-h">CTA / offer library (the give is delivered ON a meeting)</div>
+      <div className="section-h">CTA / offer library</div>
       {['tier_a', 'tier_b'].map((tier) => (
         <div key={tier} style={{ marginBottom: 8 }}>
           <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
-            {tier === 'tier_a' ? 'Tier A — product-as-the-give' : 'Tier B — analysis / teardown gives'}
+            {lib[`${tier}_label`] || (tier === 'tier_a' ? 'Tier A' : 'Tier B')}
           </div>
           {(lib[tier] || []).map((o) => (
             <div key={o.n} style={{ fontSize: 13, marginBottom: 6 }}>

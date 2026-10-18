@@ -25,8 +25,17 @@ export default function DiagramPage() {
   const [expanded, setExpanded] = useState(() => new Set())
   const store = useInstructions()
 
+  // Re-read the live config after every saved/reset edit (store.version bumps)
+  // so the Under-the-hood cards never show instructions the pipeline dropped.
   useEffect(() => {
-    api.orchestrationConfig().then(setConfig).catch((e) => setError(e.message))
+    let stale = false
+    api.orchestrationConfig()
+      .then((c) => { if (!stale) { setConfig(c); setError(null) } })
+      .catch((e) => { if (!stale) setError(e.message) })
+    return () => { stale = true }
+  }, [store.version])
+
+  useEffect(() => {
     api.unenrollStatus().then(setUnenroll).catch(() => {})
   }, [])
 

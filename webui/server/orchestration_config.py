@@ -336,6 +336,10 @@ def _sequencing_section(root):
         "linkedin_touches": linkedin,
         "cadence": [_strip_md(b) for b in _bullets(_section(cta, "Cadence placement"))],
         "cta_library": {"tier_a": _tier_items(tier_a), "tier_b": _tier_items(tier_b),
+                        # headings straight from cta-offers.md so the UI never
+                        # describes a different offer strategy than the doc
+                        "tier_a_label": tier_a.splitlines()[0].strip() if tier_a else "",
+                        "tier_b_label": tier_b.splitlines()[0].strip() if tier_b else "",
                         "anti_patterns": [_strip_md(b) for b in _bullets(anti)]},
         "variants": variants,
     }
@@ -566,7 +570,7 @@ def _news_signals_section(root):
         "scope_error": scope_error,
         "refresh_days": int(float(os.environ.get("NEWS_REFRESH_DAYS") or 30)),
         "default_model": default_model,
-        "composite": (os.environ.get("NEWS_COMPOSITE_SIGNAL") or "1").strip() != "0",
+        "composite": N._flag("NEWS_COMPOSITE_SIGNAL", True),  # same parse as the scanner
         "triggers": triggers,
     }
 
