@@ -52,7 +52,9 @@ export default function TrendsPage() {
     load().then((d) => {
       if (autoChecked.current) return
       autoChecked.current = true
-      if (d && isStale(d.fetched_at)) refresh()
+      // fetched_at stamps the reply FETCH, not the analysis: a fresh fetch with
+      // no analysis built yet (available: false) must still initialize it
+      if (d && (!d.available || isStale(d.fetched_at))) refresh()
     })
   }, [])
 
