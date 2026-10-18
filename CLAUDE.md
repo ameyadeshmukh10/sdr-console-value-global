@@ -394,6 +394,39 @@ application-**retirement** pitch, never the staying-on-EBS archiving pain.
   `erp_migration` still win per field — reset them in the Orchestration view if they hold
   the old archiving framing.
 
+## Send gates + copy hygiene (feedback section 6, added 2026-10)
+
+- **Send floor (issue 10):** `send_gate.py` (stdlib) — `send_floor(trigger)` =
+  `TRIGGER_SEND_FLOOR_<ID>` → `TRIGGER_SEND_FLOOR` → 60 (ebs_performance 45). Below-floor
+  verdicts are not segment memberships; an account whose found triggers are ALL below
+  sits in the held `below_floor` bucket (`HELD_SEGMENTS`, like `suppressed`: no segment /
+  approve-all approval; an explicit domain is the logged override → default path).
+  `erp_gate()` re-checks at generation.
+- **Personas (issue 11):** `buyer_group.retirement_buyer(title)` = the client's list (CIO,
+  VP/Director ERP or Enterprise Applications, M&A Integration, Controller/CFO, Enterprise
+  Architect; finance IN, analytics/data-science/people OUT). `erp_gate` requires it on
+  retirement/data_split; archiving trigger copy needs `is_icp_buyer` or it.
+- **Names (issue 9):** `send_gate.name_check(first, last, email, linkedin)` — no word
+  lists. Evidence = a first.last email whose last token matches the last name, or the
+  LinkedIn slug. The CRM name is kept when it agrees (same token, prefix, or same
+  initial: Mike/michael.); otherwise the greeting switches to the evidence name ("Cspa" →
+  "Stewart", also "Bob" → "Robert" — formal, never the wrong person) and `name_gate`
+  persists it (original kept as `import_flags` `name_fixed:<old>`, a "name fixed" badge
+  for the reviewer). Only an unusable name (empty / digits / "@") with no evidence is
+  HELD (`failed`, "name check: …" — fix the contact, then regenerate). Enforced before every generation path and again at `cmd_enroll`
+  (`name_check` count; also blocks copy written before a repair). CSV import flags
+  `name_check` / `name_fixable` / `title_not_buyer` (the first two + persona flag are in
+  `OFF_ICP_FLAGS`).
+- **Holds** write a stub asset (`held`, `held_reason`, `held_status`); `cmd_ingest` records
+  it as `skipped` (routing/floor/persona) or `failed` (name) and appends `, N held` to its
+  one stdout line.
+- **Hygiene (issues 5, 8, 12-15):** `lint_erp(email, route, linkedin)` adds `_hygiene` on
+  every trigger track: one consistent first-name greeting, the old dictated stock lines
+  banned (the archiving prompt no longer dictates them), unconfirmed EBS/PeopleSoft/JDE
+  named outside proof sentences (only when the asset has a route), presumptive LinkedIn
+  openers, and retirement vocabulary/licensing/sample-report on LinkedIn. The news +
+  composite prompts forbid naming an unconfirmed ERP and "clock started at announcement".
+
 ## Agent studio — editable instructions (Orchestration view, added 2026-09)
 
 The Orchestration view is the operator's editing surface for how the AI SDR thinks:

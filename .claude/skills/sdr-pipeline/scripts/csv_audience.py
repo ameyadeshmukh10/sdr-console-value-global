@@ -37,7 +37,8 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS.parents[1] / "ai-sdr" / "scripts"))  # buyer_group
 import batch_db as db                            # noqa: E402
 import suppression                               # noqa: E402
-from buyer_group import persona_for_title        # noqa: E402
+from buyer_group import persona_for_title, is_icp_buyer, retirement_buyer  # noqa: E402
+import send_gate                                 # noqa: E402
 
 MAX_ROWS = 50_000          # sanity cap — an accidental giant export, not a DoS guard
 DEFAULT_PERSONA = "it-leadership"  # broadest persona; used when a title matches none
@@ -105,6 +106,18 @@ def lead_flags(rec, domain):
     emp = _max_employees(rec.get("employees"))
     if emp is not None and emp < _EMPLOYEE_FLOOR:
         flags.append("below_icp_floor")
+    # Value Global feedback 2026-10-09: titles that own neither the ERP nor a
+    # retirement decision (issue 11), and greeting names that disagree with the
+    # email / LinkedIn (issue 9; generation repairs junk names, holds the rest).
+    title = rec.get("title") or ""
+    if not (is_icp_buyer(title) or retirement_buyer(title)[0]):
+        flags.append("title_not_buyer")
+    nc = send_gate.name_check(rec.get("first_name"), rec.get("last_name"),
+                              rec.get("email"), rec.get("linkedin_url"))
+    if not nc["ok"]:
+        flags.append("name_check")
+    elif nc["fixed"]:
+        flags.append("name_fixable")
     return flags
 
 # Normalized header -> canonical field. Headers are lowercased and squeezed to
@@ -400,7 +413,12 @@ def self_test():
     assert skipped and skipped[0]["reason"] == "no valid email"
     # flags: Bob = DE + tiny + no LinkedIn; Cara = healthcare + no country (org TLD)
     bob_flags = json.loads(bob["import_flags"])
-    assert set(bob_flags) == {"no_linkedin", "non_us_ca", "below_icp_floor"}, bob_flags
+    assert set(bob_flags) == {"no_linkedin", "non_us_ca", "below_icp_floor",
+                              "title_not_buyer"}, bob_flags  # "Chief Fun Officer"
+    # feedback issue 9: a credential in the first-name field is flagged fixable
+    assert "name_fixable" in lead_flags(
+        {"first_name": "Cspa", "last_name": "Bobbitt", "email": "stewart.bobbitt@hm.com",
+         "title": "CIO", "linkedin_url": "x", "country": "US"}, "hm.com")
     cara_flags = json.loads(cara["import_flags"])
     assert "healthcare" in cara_flags and "country_unknown" in cara_flags, cara_flags
     assert "below_icp_floor" not in cara_flags, cara_flags  # band tops at 1,000

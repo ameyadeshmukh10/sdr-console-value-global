@@ -159,6 +159,59 @@ def persona_for_title(title):
     return _PERSONA_BY_ROLE.get(buyer_role(title)[0])
 
 
+# ---- retirement / data-split buyers (Value Global feedback 2026-10-09, issue 11) ----
+# The M&A and ERP-switch tracks sell retirement and data separation, which the
+# ERP / integration / finance owners decide: CIO, VP or Director of ERP /
+# Enterprise Applications, M&A Integration Lead, Controller or CFO, Enterprise
+# Architect. Analytics, data science, people-analytics, DBA and governance ICs
+# do not own it. Finance titles are IN here (unlike buyer_role) by client ask.
+_RB_SENIOR = re.compile(r"\b(chief|vp|svp|evp|vice president|head|director|dir|lead|leader)\b",
+                        re.I)
+_RB_ERP = re.compile(r"\berp\b|enterprise (applications?|apps|systems)|"
+                     r"business (applications?|systems)|e-?business suite|\bebs\b|"
+                     r"oracle (applications|apps)|peoplesoft|jd ?edwards|\bjde\b|\bsap\b", re.I)
+_RB_MA = re.compile(r"m ?& ?a|mergers?|acquisitions?|post[- ]merger|"
+                    r"integration management|\bimo\b|separation|divestitures?|carve[- ]?outs?",
+                    re.I)
+_RB_MA_ROLE = re.compile(r"integration|separation|\blead\b|director|\bhead\b|\bvp\b|"
+                         r"vice president|manager|pmo|program", re.I)
+_RB_FIN = re.compile(r"\bcfo\b|chief financial officer|chief accounting officer|"
+                     r"\b(corporate |financial |global |group |assistant |division(al)? )?"
+                     r"(controller|comptroller)\b", re.I)
+_RB_FIN_NOT = re.compile(r"\b(project|cost|credit|production|plant|traffic|inventory|"
+                         r"quality|document|budget)\s+controller", re.I)
+_RB_CIO = re.compile(r"\bcio\b|chief information officer|chief digital (and )?information", re.I)
+_RB_ARCH = re.compile(r"enterprise architect|\b(erp|applications?|solutions?) architect|"
+                      r"chief architect", re.I)
+_RB_NOT = re.compile(r"analytics|data scien|\bbi\b|business intelligence|people (ops|operations)|"
+                     r"\bhr\b|human resources|talent", re.I)
+
+RETIREMENT_BUYERS = ("CIO, VP or Director of ERP / Enterprise Applications, M&A Integration "
+                     "Lead, Controller or CFO, Enterprise Architect")
+
+
+def retirement_buyer(title):
+    """(ok, why) — does this title own an ERP retirement / data-split decision?"""
+    t = " ".join((title or "").split())
+    if not t:
+        return False, "no title"
+    if _RB_NOT.search(t):
+        return False, "analytics / data science / people roles do not own the ERP"
+    if _EXCLUDED.search(t) or (_GTM.search(t) and not _RB_ERP.search(t)):
+        return False, "excluded function"
+    if _RB_CIO.search(t):
+        return True, "CIO"
+    if _RB_FIN.search(t) and not _RB_FIN_NOT.search(t):
+        return True, "Controller / CFO"
+    if _RB_ARCH.search(t):
+        return True, "Enterprise Architect"
+    if _RB_MA.search(t) and _RB_MA_ROLE.search(t):
+        return True, "M&A integration"
+    if _RB_ERP.search(t) and _RB_SENIOR.search(t):
+        return True, "ERP / Enterprise Applications leader"
+    return False, "not a retirement buyer"
+
+
 def self_test():
     """Offline classifier checks against the titles this client actually buys
     from (and the ones it must never touch)."""
@@ -193,6 +246,19 @@ def self_test():
     for title in not_icp:
         role, ok = buyer_role(title)
         assert not ok and persona_for_title(title) is None, f"{title!r}: role={role!r} should be NOT-ICP"
+    rb_yes = ["CIO", "Chief Information Officer", "VP Enterprise Applications",
+              "Director of ERP", "Director, Business Applications", "Head of ERP Systems",
+              "M&A Integration Lead", "Director, Post-Merger Integration", "Controller",
+              "Corporate Controller", "CFO", "Chief Financial Officer", "Enterprise Architect",
+              "Senior ERP Solutions Architect", "VP, Oracle Applications"]
+    rb_no = ["Director, People Operations Analytics", "VP Analytics and Data Science",
+             "Director of Data Analytics", "Senior Database Administrator",
+             "Records Retention Manager", "Project Controller", "VP of Sales", "CEO",
+             "ERP Analyst", "IT Support Technician", ""]
+    for title in rb_yes:
+        assert retirement_buyer(title)[0], f"{title!r} should be a retirement buyer"
+    for title in rb_no:
+        assert not retirement_buyer(title)[0], f"{title!r} should NOT be a retirement buyer"
     print("buyer_group self-test: OK")
     return 0
 

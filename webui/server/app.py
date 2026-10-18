@@ -461,7 +461,8 @@ def db_contact_meta():
 # Import-time lead-quality flags (csv_audience.lead_flags) that put a contact
 # outside the program ICP (US/CA, >=1,000 employees, no healthcare). The other
 # flags (no_linkedin, country_unknown) are informational.
-OFF_ICP_FLAGS = ("non_us_ca", "country_inferred", "below_icp_floor", "healthcare")
+OFF_ICP_FLAGS = ("non_us_ca", "country_inferred", "below_icp_floor", "healthcare",
+                 "title_not_buyer", "name_check")
 
 
 def parse_import_flags(raw):
@@ -4077,8 +4078,12 @@ SEGMENT_LABELS = {
     "ebs_performance": "EBS performance",
     "hiring": "Hiring (sales roles)", "no_signals": "No signals found",
     "suppressed": "Suppressed — do not contact",
+    "below_floor": "Held — trigger below send floor",
 }
-SEGMENT_ORDER = ERP_TRIGGER_ORDER + ["hiring", "no_signals", "suppressed"]
+SEGMENT_ORDER = ERP_TRIGGER_ORDER + ["hiring", "no_signals", "below_floor", "suppressed"]
+# Display buckets: never approvable by segment selection or approve-all; an
+# explicit per-account approval is the logged human override.
+HELD_SEGMENTS = ("suppressed", "below_floor")
 
 
 def _bdb():
@@ -4189,11 +4194,18 @@ def _account_memberships(sig_row):
         triggers = (json.loads(sig_row.get("news_detail") or "{}") or {}).get("triggers") or {}
     except (ValueError, TypeError):
         triggers = {}
+    below = []
     for tid in ERP_TRIGGER_ORDER:
         v = triggers.get(tid)
         if isinstance(v, dict) and v.get("found"):
-            out.append({"segment": tid, "score": v.get("score") or 0,
-                        "headline": v.get("headline") or "", "date": v.get("date") or ""})
+            m = {"segment": tid, "score": v.get("score") or 0,
+                 "headline": v.get("headline") or "", "date": v.get("date") or ""}
+            # Value Global feedback issue 10: a found verdict under the send
+            # floor never drives trigger copy (send_gate is stdlib-only).
+            if _send_gate().below_floor(tid, m["score"]):
+                below.append({**m, "floor": _send_gate().send_floor(tid)})
+            else:
+                out.append(m)
     try:
         hd = json.loads(sig_row.get("hiring_detail") or "{}") or {}
     except (ValueError, TypeError):
@@ -4201,9 +4213,24 @@ def _account_memberships(sig_row):
     if hd.get("sales_titles"):
         out.append({"segment": "hiring", "score": None,
                     "headline": sig_row.get("hiring_signals") or "", "date": ""})
+    if not out and below:
+        # every trigger it has is under the floor: HOLD (like suppressed), never
+        # quietly re-route to the default path
+        best = max(below, key=lambda m: m["score"])
+        return [{"segment": "below_floor", "score": best["score"],
+                 "headline": f"{SEGMENT_LABELS.get(best['segment'], best['segment'])} "
+                             f"{best['score']} < send floor {best['floor']}: {best['headline']}",
+                 "date": best["date"], "below": below}]
     if not out:
         out.append({"segment": "no_signals", "score": None, "headline": "", "date": ""})
     return out
+
+
+def _send_gate():
+    """send_gate module (stdlib-only; lives with the pipeline scripts)."""
+    sys.path.insert(0, str(GENERATE_BATCH.parent))
+    import send_gate  # noqa: E402
+    return send_gate
 
 
 def _gated_accounts_with_signals():
@@ -4329,8 +4356,8 @@ def do_approve_segments(segments=None, domains=None, approve_all=False):
     no_signals); trigger winners generate through the erp-trigger path.
     Batches the approved contacts and auto-starts generation on the new
     batches. Returns (payload, status)."""
-    # 'suppressed' is a display bucket, never an approvable segment.
-    selected = {s for s in (segments or []) if s in SEGMENT_LABELS and s != "suppressed"}
+    # held buckets ('suppressed', 'below_floor') are display-only, never approvable.
+    selected = {s for s in (segments or []) if s in SEGMENT_LABELS and s not in HELD_SEGMENTS}
     want_domains = {str(d).strip().lower() for d in (domains or []) if str(d).strip()}
     if not (approve_all or selected or want_domains):
         return {"ok": False, "error": "nothing selected — pass segments, domains, or all"}, 400
@@ -4356,6 +4383,16 @@ def do_approve_segments(segments=None, domains=None, approve_all=False):
                 approvals.append({"domain": a["domain"], "segment": "no_signals", "variant": None})
             continue
         mships = _account_memberships(row)
+        if mships and mships[0]["segment"] == "below_floor":
+            # every trigger is under the send floor (feedback issue 10): held.
+            # Only an explicit domain pushes it through, on the default path.
+            if a["domain"] not in want_domains:
+                continue
+            overridden.append({"domain": a["domain"], "reason": mships[0]["headline"]})
+            print(f"[segments] OVERRIDE: approving below-floor account {a['domain']} "
+                  f"({mships[0]['headline'][:120]})", flush=True)
+            approvals.append({"domain": a["domain"], "segment": "no_signals", "variant": None})
+            continue
         if approve_all or a["domain"] in want_domains:
             pool = mships
         else:

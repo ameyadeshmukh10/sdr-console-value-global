@@ -32,6 +32,9 @@ const FLAG_LABELS = {
   country_unknown: 'no country given',
   healthcare: 'healthcare (out of ICP)',
   below_icp_floor: 'under 1,000 employees',
+  title_not_buyer: 'title owns neither the ERP nor a retirement decision',
+  name_check: 'first name unusable, nothing to repair it from (held until fixed)',
+  name_fixable: 'first name disagrees with the email/LinkedIn (greeting will use that name)',
 }
 
 function SkippedNote({ counts }) {

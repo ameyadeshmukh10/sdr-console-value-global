@@ -32,6 +32,8 @@ sys.path.insert(0, str(SKILLS / "ai-sdr" / "scripts"))      # anthropic_client, 
 import batch_db as db                                        # noqa: E402
 import instructions as I                                     # noqa: E402
 import lint_sequence as L                                    # noqa: E402
+import buyer_group as BG                                     # noqa: E402
+import send_gate as SG                                       # noqa: E402
 from anthropic_client import (                               # noqa: E402
     AnthropicClient, extract_json, parse_message, AnthropicError, AnthropicJSONError,
 )
@@ -286,7 +288,7 @@ plus 3 LinkedIn touches anchored on that trigger.
 
 # Write rules
 - 35-110 words per email. Two or three short paragraphs separated by a blank line. ONE idea and
-  ONE ask per email.
+  ONE ask per email. Open EVERY email with the contact's first name and a comma.
 - Every touch lands in the inbox as its OWN standalone email, never a threaded reply. Write a
   DISTINCT subject line for each touch: no "RE:" or "Fwd:" prefix, never reuse a subject.
   Subject 1 names the trigger angle; subject 2 the assessment give; subject 3 the 20-minute
@@ -297,12 +299,15 @@ plus 3 LinkedIn touches anchored on that trigger.
   peer: no consulting filler, no "defined window for separating and migrating" phrasing. Then
   state what that dormant or legacy data costs in plain operational terms, adapted from the
   play: storage plus performance, slower queries, heavier backups, delays cloning the database
-  for dev and test, a close that drags. Then one bridge sentence: what if we showed you a way
-  to move that dormant data off the live system while keeping it fully searchable and
-  audit-ready? Close with the permission ask, using their real company name: "Can I send you
-  some more details to show how <Company> could benefit?" NEVER end touch 1 on an open-ended
-  question ("how are you thinking about...", "what's your plan for..."): the only questions
-  allowed are the what-if bridge and the closed send-details ask. No meeting ask in touch 1.
+  for dev and test, a close that drags. Then one bridge sentence, in your own words for this
+  account: the idea that the dormant data could move off the live system and stay searchable
+  and audit-ready. Close with a closed permission ask to send more detail, naming their real
+  company, worded fresh each time. Value Global flagged identical lines across accounts as a
+  template giveaway: NEVER write "What if we showed you a way to move that dormant data off the
+  live system" or "Can I send you some more details to show how <Company> could benefit?"
+  verbatim. NEVER end touch 1 on an open-ended question ("how are you thinking about...",
+  "what's your plan for..."): the only questions allowed are the bridge and the closed
+  send-details ask. No meeting ask in touch 1.
   Touch 1 runs long easily: keep it to 70-100 words TOTAL. One or two short sentences for the
   trigger opener, ONE sentence for the cost (pick two or three symptoms, never the whole
   list), one bridge, one ask. Count the words before you answer.
@@ -341,8 +346,10 @@ plus 3 LinkedIn touches anchored on that trigger.
   cutting-edge, seamless, robust, supercharge, unlock, transform). Never write "purge",
   "estate", "AI-powered", or any production-access reassurance. Never put pricing in a cold
   email. Vary how each email opens; do not start them all the same way.
-- LinkedIn: li_connect is a <=280-char connection note referencing the trigger (no pitch);
-  li_msg1/li_msg2 are short, value-first follow-ups offering the read.
+- LinkedIn: li_connect is a <=280-char connection note that observes the trigger and connects,
+  no pitch, never tells them what they face ("huge lift ahead", "you have a lot on your
+  plate"); li_msg1/li_msg2 are short, value-first follow-ups offering the read. Vocabulary on
+  this track is ARCHIVE; do not mix in "retiring and archiving".
 - Set the `signal` JSON field to the trigger finding with its month/date.
 
 """ + OUTPUT_SCHEMA
@@ -808,15 +815,17 @@ def erp_signal_line(segment, verdict, route=None):
     return line
 
 
-def lint_erp(email, route=None):
+def lint_erp(email, route=None, linkedin=None):
     """Structural checks for the ERP trigger sequence: length band, no dashes /
     sign-off / pricing / hype, soft question in touch 1, breakup in touch 4.
     No metric requirement — the trigger verdict is the anchor, not proof stats.
     Retirement / data-split routes get the retirement structure + claim rules."""
     route = route if isinstance(route, dict) else {}
-    if route.get("track") in RETIRE_TRACKS:
-        return _lint_retire(email, route)
-    return _lint_short(email, lo=35, hi=110)
+    retire = route.get("track") in RETIRE_TRACKS
+    issues = _lint_retire(email, route) if retire else _lint_short(email, lo=35, hi=110)
+    if issues and issues[0].startswith("missing subject"):
+        return issues
+    return issues + _hygiene(email, linkedin, route, retire)
 
 
 # Retirement-track claim rules (Value Global feedback 2026-10-09).
@@ -845,6 +854,79 @@ def _uncleared_figures(body):
             if (m.group(1), m.group(2)) != ("20", "30")]
     bad += [m.group(0) for m in _DURATION_CLAIM.finditer(body)]
     return bad
+
+
+# Copy hygiene shared by every trigger track (client feedback issues 5, 12-15).
+# Issue 12: the stock lines the archiving prompt used to dictate verbatim.
+_STOCK_LINES = re.compile(
+    r"what if we showed you a way to move that dormant data|"
+    r"can i send you some more details to show how|data[- ]separation clock", re.I)
+# Issue 14: presumptive openers that tell an executive what they face.
+_PRESUMPTIVE = re.compile(
+    r"\b(huge|big|massive|major|heavy|serious)\b[^.?!\n]{0,40}\b(lift|lot|challenge|undertaking|"
+    r"task|headache|job)\b[^.?!\n]{0,20}\bahead\b|\b(lift|work|challenges?) ahead\b|"
+    r"\bon your plate\b|\byou('re| are) (facing|about to face|up against)\b|"
+    r"\byou('ll| will) (need|have) to\b", re.I)
+# Issue 5/8: ERP products named for the prospect without confirmation. Proof /
+# capability sentences ("One Oracle EBS environment of 2 TB...") are exempt.
+_ERP_PRODUCT = re.compile(r"e-?business suite|\bebs\b|peoplesoft|jd ?edwards|\bjde\b", re.I)
+_PROOF_SENTENCE = re.compile(r"\b2\s?tb\b|20 to 30|pre-?built|works across|typical oracle ebs",
+                             re.I)
+_GREETING = re.compile(r"^\s*([A-Z][\w'’-]*(?: [A-Z][\w'’-]*)?),")
+
+
+def _greeting_issue(bodies):
+    """Issue 13: every touch opens with the same first-name greeting."""
+    greets = [(_GREETING.match(b or "") or [None, None])[1] for b in bodies]
+    if not all(greets):
+        missing = [str(i + 1) for i, g in enumerate(greets) if not g]
+        return f"greeting: touch {', '.join(missing)} does not open with the first name"
+    if len(set(greets)) > 1:
+        return f"greeting: inconsistent across touches ({', '.join(dict.fromkeys(greets))})"
+    return None
+
+
+def _unconfirmed_erp(text, route):
+    """Sentences naming an on-prem ERP product when the route has no confirmed one.
+    Assets written before routing existed carry no route: not judged."""
+    if not route or route.get("legacy"):
+        return []
+    hits = []
+    for sent in re.split(r"(?<=[.?!])\s+|\n+", text or ""):
+        m = _ERP_PRODUCT.search(sent)
+        if m and not _PROOF_SENTENCE.search(sent):
+            hits.append(m.group(0))
+    return hits
+
+
+def _hygiene(email, linkedin, route, retire):
+    """Issues 5, 12, 13, 14, 15 across email + LinkedIn."""
+    issues = []
+    g = _greeting_issue([email.get(f"body{i}", "") for i in range(1, 5)])
+    if g:
+        issues.append(g)
+    fields = [(f"step{i}", email.get(f"body{i}", "")) for i in range(1, 5)]
+    fields += [(k, str((linkedin or {}).get(k) or "")) for k in ("li_connect", "li_msg1", "li_msg2")]
+    for name, text in fields:
+        if _STOCK_LINES.search(text):
+            issues.append(f"{name}: stock line reused across accounts "
+                          f"('{_STOCK_LINES.search(text).group(0)}'); write it fresh")
+        erp = _unconfirmed_erp(text, route)
+        if erp:
+            issues.append(f"{name}: names {erp[0]!r} but no ERP is confirmed for this account "
+                          "(write it as a pattern, never as known)")
+    for k in ("li_connect", "li_msg1", "li_msg2"):
+        text = str((linkedin or {}).get(k) or "")
+        if _PRESUMPTIVE.search(text):
+            issues.append(f"{k}: presumptive opener ('{_PRESUMPTIVE.search(text).group(0)}'); "
+                          "observe the event and ask, never tell them what they face")
+        if retire and _ARCHIVING_OFFER.search(text):
+            issues.append(f"{k}: archiving vocabulary on the retirement track (say retire)")
+        if retire and L.FORBIDDEN_CTA.search(text):
+            issues.append(f"{k}: offers an uncleared asset (sample report)")
+        if retire and _LICENSE.search(text) and not (route or {}).get("licensing"):
+            issues.append(f"{k}: mentions licensing ({(route or {}).get('reason') or 'not allowed'})")
+    return issues
 
 
 # Transition periods run from CLOSING (client feedback issue 6).
@@ -946,14 +1028,86 @@ def _segment_verdict(domain, segment):
     return v if isinstance(v, dict) and v.get("found") else None
 
 
-def _write_held(contact, segment, signal, route):
-    """A held account (acquired company stays a separate unit) gets a stub
-    asset, so ingest records it as `skipped` with the reason instead of a
-    bare "no generated file" failure — and any stale copy is overwritten."""
+def _write_held(contact, segment, signal, route=None, reason=None):
+    """A held contact (separate-unit acquisition, below the send floor, wrong
+    persona for the track, a name that fails the check) gets a stub asset, so
+    ingest records it as `skipped` with the reason instead of a bare "no
+    generated file" failure — and any stale copy is overwritten."""
     _atomic_write(contact["contact_id"], {
         "contact_id": contact["contact_id"], "persona": contact.get("persona", "it-leadership"),
-        "variant": ERP_VARIANT, "segment": segment, "signal": signal, "held": True,
-        "track": "hold", "route": route, "email": {}, "linkedin": {}})
+        "variant": ERP_VARIANT if segment in ERP_PLAYS else (contact.get("variant")
+                                                             or DEFAULT_VARIANT),
+        "segment": segment, "signal": signal, "held": True,
+        "held_reason": reason or (route or {}).get("reason") or "held",
+        # a bad name is a data fix + regenerate (failed); routing holds are final
+        "held_status": "failed" if (reason or "").startswith("name check") else "skipped",
+        "track": (route or {}).get("track"), "route": route, "email": {}, "linkedin": {}})
+
+
+def _persist_name_fix(contact, nc):
+    """Store a SAFE name repair on the contact (Bison + every later generation
+    read the DB name) and keep the original in import_flags for review."""
+    def _run():
+        conn = db.connect()
+        try:
+            row = conn.execute("SELECT import_flags FROM contacts WHERE contact_id=?",
+                               (contact["contact_id"],)).fetchone()
+            try:
+                flags = json.loads((row["import_flags"] if row else None) or "[]") or []
+            except (ValueError, TypeError):
+                flags = []
+            flags = [f for f in flags if not str(f).startswith("name_fixed:")]
+            flags.append(f"name_fixed:{contact.get('first_name') or ''}")
+            conn.execute("UPDATE contacts SET first_name=?, import_flags=? WHERE contact_id=?",
+                         (nc["name"], json.dumps(flags), contact["contact_id"]))
+            conn.commit()
+        finally:
+            conn.close()
+    try:
+        db.retry_locked(_run)
+    except Exception as e:  # noqa: BLE001 — the prompt still uses the repaired name
+        sys.stderr.write(f"[generate] name fix not persisted for {contact['contact_id']}: {e}\n")
+
+
+def name_gate(contact):
+    """(contact, hold_reason). Greets with the name the contact's email /
+    LinkedIn states when the CRM first name disagrees ("Cspa" -> "Stewart"),
+    persisting it for review; holds only an unusable name with nothing to
+    repair it from (feedback issue 9)."""
+    nc = SG.name_check(contact.get("first_name"), contact.get("last_name"),
+                       contact.get("email"), contact.get("linkedin_url"))
+    if not nc["ok"]:
+        return contact, f"name check: {nc['reason']}"
+    if nc["fixed"]:
+        sys.stderr.write(f"[generate] {contact['contact_id']}: {nc['reason']}\n")
+        _persist_name_fix(contact, nc)
+        return dict(contact, first_name=nc["name"]), None
+    return contact, None
+
+
+def erp_gate(contact, segment, verdict, route):
+    """Why this trigger contact must NOT be generated, or None:
+    - route hold (acquired company stays a separate unit — issue 10);
+    - verdict score under the trigger's send floor (issue 10);
+    - title outside the track's buyers (issue 11): retirement / data split need
+      the client's list (CIO, VP/Director ERP or Enterprise Applications, M&A
+      Integration, Controller/CFO, Enterprise Architect); archiving needs the
+      ERP buyer group."""
+    if route["track"] == "hold":
+        return f"held: {route['reason']}"
+    score = (verdict or {}).get("score") or 0
+    if SG.below_floor(segment, score):
+        return (f"held: {ERP_PLAYS.get(segment, {}).get('label', segment)} score {score} is "
+                f"below the send floor {SG.send_floor(segment)}")
+    title = contact.get("title") or ""
+    if route["track"] in RETIRE_TRACKS:
+        ok, why = BG.retirement_buyer(title)
+        if not ok:
+            return (f"held: persona {title!r} does not fit the {route['track'].replace('_', ' ')} "
+                    f"track ({why}); target {BG.RETIREMENT_BUYERS}")
+    elif not (BG.is_icp_buyer(title) or BG.retirement_buyer(title)[0]):
+        return f"held: persona {title!r} is outside the ERP buyer group"
+    return None
 
 
 def generate_contact_erp(contact, segment, verdict, client, write=True, tech_line=None):
@@ -963,12 +1117,13 @@ def generate_contact_erp(contact, segment, verdict, client, write=True, tech_lin
     cid, persona = contact["contact_id"], contact.get("persona", "it-leadership")
     route = erp_route(segment, verdict, tech_line)
     signal = erp_signal_line(segment, verdict, route)
-    if route["track"] == "hold":
+    hold = erp_gate(contact, segment, verdict, route)
+    if hold:
         if write:
-            _write_held(contact, segment, signal, route)
+            _write_held(contact, segment, signal, route, reason=hold)
         return {"status": "failed", "asset": None, "signal": signal,
                 "company": contact.get("company", ""), "web_searches": 0, "attempts": 0,
-                "issues": [f"held: {route['reason']}"], "route": route,
+                "issues": [hold], "route": route,
                 "cache_read": 0, "cache_write": 0}
     system = ERP_RETIRE_SYSTEM if route["track"] in RETIRE_TRACKS else ERP_SYSTEM
     issues, last_asset = ["no output"], None
@@ -1001,7 +1156,7 @@ def generate_contact_erp(contact, segment, verdict, client, write=True, tech_lin
             "email": data.get("email", {}) or {},
             "linkedin": data.get("linkedin", {}) or {},
         }
-        issues = lint_erp(last_asset["email"], route)
+        issues = lint_erp(last_asset["email"], route, last_asset["linkedin"])
         if not issues:
             if write:
                 _atomic_write(cid, last_asset)
@@ -1246,7 +1401,7 @@ def lint_assets(asset):
     """Variant-aware lint used by both generation and ingest (reads asset['variant'])."""
     variant = asset.get("variant", DEFAULT_VARIANT)
     if variant == ERP_VARIANT:
-        return lint_erp(asset.get("email", {}), asset.get("route"))
+        return lint_erp(asset.get("email", {}), asset.get("route"), asset.get("linkedin"))
     fn = LINTERS.get(variant, lint_email)
     return fn(asset.get("email", {}))
 
@@ -1459,6 +1614,13 @@ def generate_one(contact, knowledge, client, write=True, variant=DEFAULT_VARIANT
     """
     domain = (contact.get("domain") or db.email_domain(contact.get("email")))
 
+    contact, name_hold = name_gate(contact)
+    if name_hold:
+        if write:
+            _write_held(contact, (contact.get("segment") or "").strip(), "", reason=name_hold)
+        return {"contact_id": contact["contact_id"], "status": "failed",
+                "issues": [name_hold], "used_cache": True}
+
     # Fusion suppression guard: a pure-Fusion estate (Fusion detected, no
     # on-prem ERP) is not a prospect — ROAD cannot archive out of Fusion.
     # Normally these accounts are stopped at the segment gate; this catches
@@ -1639,14 +1801,20 @@ def prepare_batch_requests(contacts, knowledge, client=None, variant=DEFAULT_VAR
         cid = str(c["contact_id"])
         domain = c.get("domain") or db.email_domain(c.get("email"))
         seg = (c.get("segment") or "").strip()
+        c, name_hold = name_gate(c)
+        if name_hold:
+            sys.stderr.write(f"[generate] {cid} held: {name_hold}\n")
+            _write_held(c, seg, "", reason=name_hold)
+            continue
         if c.get("variant") == ERP_VARIANT or seg in ERP_PLAYS:
             verdict = _segment_verdict(domain, seg)
             if verdict:
                 tech_line, _ = _cached_tech(domain)
                 route = erp_route(seg, verdict, tech_line)
-                if route["track"] == "hold":
-                    sys.stderr.write(f"[generate] {cid} held ({domain}): {route['reason']}\n")
-                    _write_held(c, seg, erp_signal_line(seg, verdict, route), route)
+                hold = erp_gate(c, seg, verdict, route)
+                if hold:
+                    sys.stderr.write(f"[generate] {cid} ({domain}): {hold}\n")
+                    _write_held(c, seg, erp_signal_line(seg, verdict, route), route, reason=hold)
                     continue
                 system = ERP_RETIRE_SYSTEM if route["track"] in RETIRE_TRACKS else ERP_SYSTEM
                 requests.append({"custom_id": cid, "params": client.build_body(

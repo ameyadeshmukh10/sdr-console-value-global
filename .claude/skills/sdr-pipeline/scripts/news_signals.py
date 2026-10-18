@@ -238,6 +238,11 @@ was true when the page was written.
 - Prefer primary sources: company newsroom, SEC filings, official press releases, the company's own
   careers pages. Aggregators and rumors do not qualify on their own.
 - Every found=true verdict MUST cite the best source_url you actually used.
+- Never name the ERP a company runs (Oracle EBS, PeopleSoft, JD Edwards, SAP...) in the headline,
+  summary, or details unless a source you cite says so. Write what the evidence shows, not what such
+  deals "typically require" — an inference stated as fact poisons the outreach built on it.
+- Deal timing: transition periods run from CLOSING, not announcement; never say a clock started at
+  announcement, and never call a pending deal closed.
 - Use AT MOST {max_searches} web searches. If nothing qualifies, STOP searching and report
   found=false — do not keep burning searches.
 
@@ -619,6 +624,11 @@ Rules:
   sharpens the angle — never list everything.
 - Use ONLY the facts given. Never invent or upgrade a weak signal. Judge every event date relative
   to today — an event in the past is described as past.
+- Name an ERP product ONLY when the detected tech stack line or a trigger's evidence names it for
+  this company. Never write what a deal "typically requires" (e.g. "consolidating or retiring
+  redundant Oracle EBS instances") as if it were known about this account.
+- Transition periods run from closing; never say a clock started at announcement, and never call a
+  pending deal closed.
 - Plain factual research prose — no advice, no meta-commentary about outreach or angles, no second
   person. This text is reused verbatim as cached research context by copy generation, so it must
   read as a neutral account-research summary: what happened, when, and the data-retirement

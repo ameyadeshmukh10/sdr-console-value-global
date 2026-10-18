@@ -100,8 +100,10 @@ def cmd_ingest(args):
         try:
             asset = json.loads(p.read_text())
             if asset.get("held"):  # routing held the account (e.g. separate unit)
-                reason = ((asset.get("route") or {}).get("reason") or "held by routing")
-                db.set_contact_status(conn, r["contact_id"], "skipped", f"held: {reason}"[:400])
+                reason = (asset.get("held_reason")
+                          or f"held: {(asset.get('route') or {}).get('reason') or 'by routing'}")
+                status = "failed" if asset.get("held_status") == "failed" else "skipped"
+                db.set_contact_status(conn, r["contact_id"], status, reason[:400])
                 held += 1
                 continue
             issues = G.lint_assets(asset)
@@ -284,6 +286,29 @@ def cmd_enroll(args):
     rows = kept
     if not rows:
         print(f"enroll: all contacts suppressed. {counts}")
+        return 0
+
+    # Name gate (Value Global feedback issue 9: "Cspa" greeted in every touch).
+    # Copy written with a name that fails the check — or that generation would
+    # now repair — never enrolls; it goes back to `failed` for regeneration.
+    import send_gate as SG  # noqa: E402 (stdlib-only)
+    kept = []
+    for r in rows:
+        nc = SG.name_check(r.get("first_name"), r.get("last_name"), r.get("email"),
+                           r.get("linkedin_url"))
+        if nc["ok"] and not nc["fixed"]:
+            kept.append(r)
+            continue
+        counts["name_check"] = counts.get("name_check", 0) + 1
+        reason = f"name check: {nc['reason']}"
+        if args.dry_run:
+            print(f"  [name] {r['email']} — {reason}, will not enroll")
+        else:
+            db.set_contact_status(conn, r["contact_id"], "failed", error=reason[:400])
+            print(f"  [name] {r['email']} — {reason}")
+    rows = kept
+    if not rows:
+        print(f"enroll: nothing left after the name check. {counts}")
         return 0
 
     # Monthly volume guardrail (client program: 1,500-3,000 contacts/month,
