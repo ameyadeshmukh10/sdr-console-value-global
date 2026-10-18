@@ -398,10 +398,13 @@ application-**retirement** pitch, never the staying-on-EBS archiving pain.
 
 - **Send floor (issue 10):** `send_gate.py` (stdlib) — `send_floor(trigger)` =
   `TRIGGER_SEND_FLOOR_<ID>` → `TRIGGER_SEND_FLOOR` → 60 (ebs_performance 45). Below-floor
-  verdicts are not segment memberships; an account whose found triggers are ALL below
-  sits in the held `below_floor` bucket (`HELD_SEGMENTS`, like `suppressed`: no segment /
-  approve-all approval; an explicit domain is the logged override → default path).
-  `erp_gate()` re-checks at generation.
+  verdicts are not segment memberships; an account where NO trigger qualifies (all below
+  the floor, or an M&A verdict saying the acquired company stays a separate unit —
+  `send_gate.separate_unit()`, incl. research returned non-found) sits in the held
+  `held_trigger` bucket (`HELD_SEGMENTS`, like `suppressed`) even if it also has a hiring
+  membership: no segment / approve-all approval; an explicit domain is the logged override
+  → default path. Generation re-checks: `erp_gate()` and `_segment_hold()` (a separate-unit
+  verdict holds already-approved contacts instead of falling back to the default path).
 - **Personas (issue 11):** `buyer_group.retirement_buyer(title)` = the client's list (CIO,
   VP/Director ERP or Enterprise Applications, M&A Integration, Controller/CFO, Enterprise
   Architect; finance IN, analytics/data-science/people OUT). `erp_gate` requires it on

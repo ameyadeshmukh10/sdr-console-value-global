@@ -2422,6 +2422,16 @@ def start_batch_job(limit=None, batch_ids=None, variant="value-give", split=None
 
     knowledge = G.load_knowledge()
     requests, manifest = G.prepare_batch_requests(contacts, knowledge, variant=variant)
+    if not requests:
+        # every contact was held by a send gate (name / floor / persona /
+        # routing) and already has its stub asset: record the holds via the
+        # canonical ingest and finish locally — never submit an empty batch
+        for bid in selected:
+            run_script([str(SDR_BATCHES), "ingest", str(bid)], timeout=300)
+        INDEX.build()
+        return {"ok": True, "job_id": None, "anthropic_batch_id": None, "request_count": 0,
+                "write_only": 0, "held": len(contacts),
+                "note": "every selected contact was held by a send gate; nothing submitted"}, 200
     client = G.AnthropicClient()
     batch = client.create_batch(requests)
 
@@ -4084,12 +4094,12 @@ SEGMENT_LABELS = {
     "ebs_performance": "EBS performance",
     "hiring": "Hiring (sales roles)", "no_signals": "No signals found",
     "suppressed": "Suppressed — do not contact",
-    "below_floor": "Held — trigger below send floor",
+    "held_trigger": "Held — weak or separate-unit trigger",
 }
-SEGMENT_ORDER = ERP_TRIGGER_ORDER + ["hiring", "no_signals", "below_floor", "suppressed"]
+SEGMENT_ORDER = ERP_TRIGGER_ORDER + ["hiring", "no_signals", "held_trigger", "suppressed"]
 # Display buckets: never approvable by segment selection or approve-all; an
 # explicit per-account approval is the logged human override.
-HELD_SEGMENTS = ("suppressed", "below_floor")
+HELD_SEGMENTS = ("suppressed", "held_trigger")
 
 
 def _bdb():
@@ -4200,7 +4210,7 @@ def _account_memberships(sig_row):
         triggers = (json.loads(sig_row.get("news_detail") or "{}") or {}).get("triggers") or {}
     except (ValueError, TypeError):
         triggers = {}
-    below = []
+    held = []  # triggers that may not drive copy: below the send floor / separate unit
     for tid in ERP_TRIGGER_ORDER:
         v = triggers.get(tid)
         if isinstance(v, dict) and v.get("found"):
@@ -4209,9 +4219,24 @@ def _account_memberships(sig_row):
             # Value Global feedback issue 10: a found verdict under the send
             # floor never drives trigger copy (send_gate is stdlib-only).
             if _send_gate().below_floor(tid, m["score"]):
-                below.append({**m, "floor": _send_gate().send_floor(tid)})
+                floor = _send_gate().send_floor(tid)
+                held.append({**m, "why": f"{SEGMENT_LABELS.get(tid, tid)} {m['score']} < "
+                                         f"send floor {floor}"})
             else:
                 out.append(m)
+        elif _send_gate().separate_unit(v):
+            # downgraded (or researched non-found) because the acquired company
+            # stays a separate unit: a HOLD, not an absence of signal
+            held.append({"segment": tid, "score": 0, "date": (v or {}).get("date") or "",
+                         "headline": (v or {}).get("summary") or "",
+                         "why": "M&A: acquired company runs as a separate unit"})
+    if held and not out:
+        # no trigger qualifies: HOLD the account (like suppressed) even when it
+        # has a hiring membership — never quietly re-route to the default path
+        best = max(held, key=lambda m: m["score"])
+        return [{"segment": "held_trigger", "score": best["score"] or None,
+                 "headline": f"{best['why']}: {best['headline']}"[:300],
+                 "date": best["date"], "held": held}]
     try:
         hd = json.loads(sig_row.get("hiring_detail") or "{}") or {}
     except (ValueError, TypeError):
@@ -4219,14 +4244,6 @@ def _account_memberships(sig_row):
     if hd.get("sales_titles"):
         out.append({"segment": "hiring", "score": None,
                     "headline": sig_row.get("hiring_signals") or "", "date": ""})
-    if not out and below:
-        # every trigger it has is under the floor: HOLD (like suppressed), never
-        # quietly re-route to the default path
-        best = max(below, key=lambda m: m["score"])
-        return [{"segment": "below_floor", "score": best["score"],
-                 "headline": f"{SEGMENT_LABELS.get(best['segment'], best['segment'])} "
-                             f"{best['score']} < send floor {best['floor']}: {best['headline']}",
-                 "date": best["date"], "below": below}]
     if not out:
         out.append({"segment": "no_signals", "score": None, "headline": "", "date": ""})
     return out
@@ -4362,7 +4379,7 @@ def do_approve_segments(segments=None, domains=None, approve_all=False):
     no_signals); trigger winners generate through the erp-trigger path.
     Batches the approved contacts and auto-starts generation on the new
     batches. Returns (payload, status)."""
-    # held buckets ('suppressed', 'below_floor') are display-only, never approvable.
+    # held buckets ('suppressed', 'held_trigger') are display-only, never approvable.
     selected = {s for s in (segments or []) if s in SEGMENT_LABELS and s not in HELD_SEGMENTS}
     want_domains = {str(d).strip().lower() for d in (domains or []) if str(d).strip()}
     if not (approve_all or selected or want_domains):
@@ -4389,13 +4406,13 @@ def do_approve_segments(segments=None, domains=None, approve_all=False):
                 approvals.append({"domain": a["domain"], "segment": "no_signals", "variant": None})
             continue
         mships = _account_memberships(row)
-        if mships and mships[0]["segment"] == "below_floor":
-            # every trigger is under the send floor (feedback issue 10): held.
+        if mships and mships[0]["segment"] == "held_trigger":
+            # no trigger clears the floor / all are separate-unit (issue 10): held.
             # Only an explicit domain pushes it through, on the default path.
             if a["domain"] not in want_domains:
                 continue
             overridden.append({"domain": a["domain"], "reason": mships[0]["headline"]})
-            print(f"[segments] OVERRIDE: approving below-floor account {a['domain']} "
+            print(f"[segments] OVERRIDE: approving held-trigger account {a['domain']} "
                   f"({mships[0]['headline'][:120]})", flush=True)
             approvals.append({"domain": a["domain"], "segment": "no_signals", "variant": None})
             continue

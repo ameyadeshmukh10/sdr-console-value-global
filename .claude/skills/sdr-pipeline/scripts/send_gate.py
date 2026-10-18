@@ -20,7 +20,8 @@ from __future__ import annotations
 import os
 import re
 import sys
-from typing import TypedDict
+from collections.abc import Mapping
+from typing import TypedDict, cast
 
 DEFAULT_SEND_FLOOR: int = 60
 _FLOOR_DEFAULTS: dict[str, int] = {"ebs_performance": 45}
@@ -55,6 +56,24 @@ def below_floor(trigger_id: str | None, score: int | float | str | None) -> bool
         return True
 
 
+def separate_unit(verdict: object) -> bool:
+    """An M&A verdict saying the acquired company stays a separate unit: no
+    consolidation, nothing to retire — the account is HELD, not re-routed to
+    another path. True for the guard's downgrade (details.separate_unit) and
+    for research that itself returned found=false with that integration."""
+    v = _as_json_object(verdict)
+    details = _as_json_object(v.get("details")) if v is not None else None
+    if details is None:
+        return False
+    return ("separate_unit" in details
+            or str(details.get("integration") or "").strip().lower() == "separate_unit")
+
+
+def _as_json_object(value: object) -> Mapping[str, object] | None:
+    """`value` as a JSON object (str keys — json.loads output), else None."""
+    return cast("Mapping[str, object]", value) if isinstance(value, Mapping) else None
+
+
 # ---- name check ----------------------------------------------------------------
 # No word lists: the email's owner is the person reading the email, so when the
 # email (first.last, last token = the last name) or the LinkedIn slug names the
@@ -63,36 +82,6 @@ def below_floor(trigger_id: str | None, score: int | float | str | None) -> bool
 # Rob / robert.); otherwise the greeting switches to the evidence name and the
 # contact is marked for review. Worst case is formal ("Robert" for a "Bob"),
 # never the wrong person.
-
-
-def _tokens(s: str | None) -> list[str]:
-    return [t for t in re.split(r"[^a-z]+", (s or "").lower()) if len(t) >= 2]
-
-
-def _linkedin_tokens(url: str | None) -> list[str]:
-    m = re.search(r"/in/([^/?#]+)", url or "", re.I)
-    if not m:
-        return []
-    # slugs often end in a disambiguator ("stewart-bobbitt-4a1b2c3")
-    return [t for t in re.split(r"[^a-z0-9]+", m.group(1).lower())
-            if len(t) >= 2 and not re.search(r"\d", t)]
-
-
-def _same_name(a: str, b: str) -> bool:
-    """Same token, or one is a prefix of the other (3+ letters)."""
-    return bool(a and b) and (a == b or (min(len(a), len(b)) >= 3
-                                         and (a.startswith(b) or b.startswith(a))))
-
-
-def _evidence_name(last: str, local: str, ltoks: list[str]) -> str:
-    """The first name the contact's own identifiers state, or ''."""
-    etoks = _tokens(local)
-    if re.search(r"[._-]", local) and len(etoks) >= 2 and \
-            (not last or _same_name(last, etoks[-1]) or last in etoks):
-        return etoks[0]
-    if len(ltoks) >= 2 and (not last or _same_name(last, ltoks[-1]) or last in ltoks):
-        return ltoks[0]
-    return ""
 
 
 def name_check(first_name: str | None, last_name: str | None = "", email: str | None = "",
@@ -125,6 +114,56 @@ def name_check(first_name: str | None, last_name: str | None = "", email: str | 
                       "fix the contact before sending"}
 
 
+def greets_stale_name(body: str | None, old_names: list[str]) -> str | None:
+    """The replaced name the copy still greets ("Cspa," / "Hi Cspa,"), or None.
+    Binds already-written copy to a name repair: copy generated before the
+    repair must never enroll under the repaired row. Only the recorded old
+    names are judged, so ordinary openers ("Curious, ...") never trip it."""
+    first_line = (body or "").strip().splitlines()[0] if (body or "").strip() else ""
+    m = re.match(r"^\s*(?:(?:hi|hello|hey|dear)\s+)?([A-Za-z][\w'’-]*)\s*,", first_line, re.I)
+    if not m:
+        return None
+    said = re.sub(r"[^a-z]", "", m.group(1).lower())
+    for old in old_names:
+        if said and said == re.sub(r"[^a-z]", "", (old or "").lower()):
+            return m.group(1)
+    return None
+
+
+def _evidence_name(last: str, local: str, ltoks: list[str]) -> str:
+    """The first name the contact's own identifiers state, or ''. Requires the
+    known last name as the LAST token ("first.last"), so a reversed
+    "smith.john" or an unknown surname is ambiguous and never used."""
+    if not last:
+        return ""
+    etoks = _tokens(local)
+    if re.search(r"[._-]", local) and len(etoks) >= 2 and _same_name(last, etoks[-1]) \
+            and not _same_name(last, etoks[0]):
+        return etoks[0]
+    if len(ltoks) >= 2 and _same_name(last, ltoks[-1]) and not _same_name(last, ltoks[0]):
+        return ltoks[0]
+    return ""
+
+
+def _same_name(a: str, b: str) -> bool:
+    """Same token, or one is a prefix of the other (3+ letters)."""
+    return bool(a and b) and (a == b or (min(len(a), len(b)) >= 3
+                                         and (a.startswith(b) or b.startswith(a))))
+
+
+def _tokens(s: str | None) -> list[str]:
+    return [t for t in re.split(r"[^a-z]+", (s or "").lower()) if len(t) >= 2]
+
+
+def _linkedin_tokens(url: str | None) -> list[str]:
+    m = re.search(r"/in/([^/?#]+)", url or "", re.I)
+    if not m:
+        return []
+    # slugs often end in a disambiguator ("stewart-bobbitt-4a1b2c3")
+    return [t for t in re.split(r"[^a-z0-9]+", m.group(1).lower())
+            if len(t) >= 2 and not re.search(r"\d", t)]
+
+
 def self_test() -> int:
     cases: list[tuple[tuple[str, str, str, str], tuple[bool, str, bool]]] = [
         # (first, last, email, linkedin) -> (ok, name, fixed)
@@ -144,6 +183,11 @@ def self_test() -> int:
         (("", "Bobbitt", "stewart.bobbitt@x.com", ""), (True, "Stewart", True)),
         (("", "Lee", "info@x.com", ""), (False, "", False)),
         (("J0hn", "Doe", "jd@x.com", ""), (False, "J0hn", False)),
+        # ambiguous identifiers are no evidence: never repaired to the surname
+        (("Cspa", "Smith", "smith.john@x.com", ""), (True, "Cspa", False)),  # reversed
+        (("John", "Smith", "smith.john@x.com", "https://linkedin.com/in/smith-john"),
+         (True, "John", False)),
+        (("Cspa", "", "stewart.bobbitt@x.com", ""), (True, "Cspa", False)),  # surname unknown
     ]
     failed: list[object] = []
     for args, (ok, name, fixed) in cases:
@@ -153,6 +197,14 @@ def self_test() -> int:
         if mark == "FAIL":
             failed.append(args)
         print(f"[send_gate] {mark} name_check{args[:3]} -> {got} {r['reason']}")
+    greet = [greets_stale_name("Cspa, I saw...", ["Cspa"]) == "Cspa",
+             greets_stale_name("Hi Cspa, I saw...", ["Cspa"]) == "Cspa",
+             greets_stale_name("Stewart, I saw...", ["Cspa"]) is None,
+             greets_stale_name("Curious, how...", ["Cspa"]) is None,
+             greets_stale_name("Cspa, I saw...", []) is None]
+    print(f"[send_gate] {'PASS' if all(greet) else 'FAIL'} greets_stale_name {greet}")
+    if not all(greet):
+        failed.append("greeting")
     os.environ.pop("TRIGGER_SEND_FLOOR", None)
     floors = (send_floor("ma_carveout"), send_floor("ebs_performance"))
     os.environ["TRIGGER_SEND_FLOOR_MA_CARVEOUT"] = "70"

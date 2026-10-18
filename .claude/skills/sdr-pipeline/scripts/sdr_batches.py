@@ -85,6 +85,7 @@ def cmd_get_batch(args):
 def cmd_ingest(args):
     import generate_batch as G  # variant-aware linter (reads asset['variant'])
     conn = db.connect()
+    db.init_schema(conn)  # additive migrations (e.g. contacts.track) before the UPDATEs below
     rows = db.get_batch(conn, args.batch_id)
     if not rows:
         print(f"batch {args.batch_id}: no contacts")
@@ -303,11 +304,30 @@ def cmd_enroll(args):
     for r in rows:
         nc = SG.name_check(r.get("first_name"), r.get("last_name"), r.get("email"),
                            r.get("linkedin_url"))
-        if nc["ok"] and not nc["fixed"]:
+        reason = None if (nc["ok"] and not nc["fixed"]) else f"name check: {nc['reason']}"
+        if reason is None:
+            # bind the WRITTEN copy to a name repair: copy generated before it
+            # still greets the replaced name ("Cspa,") — recorded at repair
+            # time as import_flags name_fixed:<old>
+            try:
+                old = [f.split(":", 1)[1] for f in json.loads(r.get("import_flags") or "[]")
+                       if str(f).startswith("name_fixed:")]
+            except (ValueError, TypeError):
+                old = []
+            if old:
+                try:
+                    body1 = (json.loads((db.GEN_DIR / f"{r['contact_id']}.json").read_text())
+                             .get("email") or {}).get("body1", "")
+                except (OSError, ValueError):
+                    body1 = ""
+                stale = SG.greets_stale_name(body1, old)
+                if stale:
+                    reason = (f"name check: copy still greets the replaced name {stale!r} "
+                              f"(now {nc['name']!r}); regenerate")
+        if reason is None:
             kept.append(r)
             continue
         counts["name_check"] = counts.get("name_check", 0) + 1
-        reason = f"name check: {nc['reason']}"
         if args.dry_run:
             print(f"  [name] {r['email']} — {reason}, will not enroll")
         else:

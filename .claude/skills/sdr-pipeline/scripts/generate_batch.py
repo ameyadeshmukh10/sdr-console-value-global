@@ -387,7 +387,9 @@ _ORACLE_LEGACY = ("e-business suite", "ebs", "peoplesoft", "jd edwards", "jde", 
 
 def _legacy_erp(details, tech_line):
     """The old system's name when CONFIRMED (verdict legacy_erp or the
-    deterministic tech scan), else '' — never guessed (feedback issue 8)."""
+    deterministic tech scan of the prospect's own domain), else '' — never
+    guessed (feedback issue 8). Callers pass tech_line=None when the system
+    being retired is NOT the prospect's (acquirer / carve-out buyer)."""
     legacy = str(details.get("legacy_erp") or "").strip()
     if legacy:
         return legacy
@@ -408,7 +410,7 @@ def erp_route(segment, verdict, tech_line=None):
     d = (verdict or {}).get("details") or {}
     if not isinstance(d, dict):
         d = {}
-    legacy = _legacy_erp(d, tech_line)
+    legacy = _legacy_erp(d, tech_line)  # re-derived below for buyer-side M&A
     route = {"track": "archiving", "side": "", "licensing": False, "target": "",
              "legacy": legacy, "entity": str(d.get("entity") or "").strip(),
              "closed": d.get("closed") if isinstance(d.get("closed"), bool) else None,
@@ -428,6 +430,10 @@ def erp_route(segment, verdict, tech_line=None):
             else:
                 role = "acquirer"
         route["side"] = role
+        if role in ("acquirer", "carveout_buyer"):
+            # the system being retired belongs to the acquired / carved-out
+            # entity: the buyer's own tech scan says nothing about it
+            route["legacy"] = _legacy_erp(d, None)
         integ = str(d.get("integration") or "").strip().lower()
         separate = integ == "separate_unit" or (
             not integ and role == "acquirer"
@@ -446,8 +452,11 @@ def erp_route(segment, verdict, tech_line=None):
         target = str(d.get("platform") or "").strip()
         route.update(track="retirement", side="erp_switch", target=target)
         tl = target.lower()
-        if "fusion" in tl or ("oracle" in tl and "cloud" in tl):
-            route["reason"] = "ERP switch to Oracle Fusion: retirement, no licensing claim"
+        if "oracle" in tl or "fusion" in tl or "netsuite" in tl:
+            # Oracle-owned destination (Fusion, NetSuite...): still an Oracle
+            # license, so the "license goes away" claim does not hold
+            route["reason"] = (f"ERP switch to {target} (an Oracle product): retirement, "
+                               "no licensing claim")
         elif not target or tl == "other":
             route["reason"] = "ERP switch, target unknown: retirement, no licensing claim"
         else:
@@ -586,18 +595,32 @@ def retire_example_block(route):
 _EXAMPLE_WORDS = None
 
 
+# Sentences carrying a cleared proof: ERP_RETIRE_SYSTEM REQUIRES their exact
+# wording, so they never count as copying a sample (PR #31 review).
+_CLEARED_PROOF = re.compile(r"infocorvus|\$1\s?m\s?to\s?\$?6\s?m|\b2\s?tb\b|20 to 30", re.I)
+
+
+def _drop_proof_sentences(text):
+    return " | ".join(sent for sent in re.split(r"(?<=[.?!])\s+|\n+", text or "")
+                      if not _CLEARED_PROOF.search(sent))
+
+
 def _example_overlap(body, n=12):
     """The first run of >= n consecutive words a body shares with any client
-    sample (placeholders never match), or ''."""
+    sample (placeholders and cleared-proof sentences never match), or ''."""
     global _EXAMPLE_WORDS
     if _EXAMPLE_WORDS is None:
         grams = set()
         for text in RETIRE_EXAMPLES.values():
-            w = re.findall(r"[a-z0-9$']+", re.sub(r"\{[^}]*\}", " | ", text).lower())
-            grams.update(" ".join(w[i:i + n]) for i in range(len(w) - n + 1))
+            text = _drop_proof_sentences(re.sub(r"\{[^}]*\}", " | ", text))
+            w = re.findall(r"[a-z0-9$'|]+", text.lower())
+            grams.update(" ".join(w[i:i + n]) for i in range(len(w) - n + 1)
+                         if "|" not in w[i:i + n])
         _EXAMPLE_WORDS = grams
-    w = re.findall(r"[a-z0-9$']+", body.lower())
+    w = re.findall(r"[a-z0-9$'|]+", _drop_proof_sentences(body).lower())
     for i in range(len(w) - n + 1):
+        if "|" in w[i:i + n]:
+            continue
         g = " ".join(w[i:i + n])
         if g in _EXAMPLE_WORDS:
             return g
@@ -1010,6 +1033,27 @@ def _lint_retire(email, route):
     return issues
 
 
+def _segment_hold(domain, segment):
+    """Hold reason when the stored verdict for (domain, segment) says the
+    acquired company stays a separate unit (downgraded by the guard, or
+    returned non-found by research) — such contacts are HELD, never sent down
+    the default path (feedback issue 10)."""
+    if not domain or segment != "ma_carveout":
+        return None
+    conn = db.connect()
+    try:
+        row = db.get_signal(conn, domain)
+    finally:
+        conn.close()
+    try:
+        triggers = (json.loads((row or {}).get("news_detail") or "{}") or {}).get("triggers") or {}
+    except (ValueError, TypeError):
+        return None
+    if SG.separate_unit(triggers.get(segment)):
+        return "held: acquired company runs as a separate unit: no consolidation, nothing to retire"
+    return None
+
+
 def _segment_verdict(domain, segment):
     """The stored news-trigger verdict for (domain, segment), or None when the
     account has no found verdict for it (e.g. a re-scan dropped it)."""
@@ -1067,6 +1111,12 @@ def _persist_name_fix(contact, nc):
         db.retry_locked(_run)
     except Exception as e:  # noqa: BLE001 — the prompt still uses the repaired name
         sys.stderr.write(f"[generate] name fix not persisted for {contact['contact_id']}: {e}\n")
+    # copy written under the old name must never survive a failed regeneration
+    # (it would ingest + enroll under the repaired row) — drop it now
+    try:
+        (db.GEN_DIR / f"{contact['contact_id']}.json").unlink(missing_ok=True)
+    except OSError as e:
+        sys.stderr.write(f"[generate] stale copy not removed for {contact['contact_id']}: {e}\n")
 
 
 def name_gate(contact):
@@ -1642,6 +1692,12 @@ def generate_one(contact, knowledge, client, write=True, variant=DEFAULT_VARIANT
     seg = (contact.get("segment") or "").strip()
     if contact.get("variant") == ERP_VARIANT or seg in ERP_PLAYS:
         verdict = _segment_verdict(domain, seg)
+        held = None if verdict else _segment_hold(domain, seg)
+        if held:
+            if write:
+                _write_held(contact, seg, "", reason=held)
+            return {"contact_id": contact["contact_id"], "status": "failed",
+                    "issues": [held], "used_cache": True}
         if verdict:
             r = generate_contact_erp(contact, seg, verdict, client, write=write,
                                      tech_line=_cached_tech(domain)[0])
@@ -1808,6 +1864,11 @@ def prepare_batch_requests(contacts, knowledge, client=None, variant=DEFAULT_VAR
             continue
         if c.get("variant") == ERP_VARIANT or seg in ERP_PLAYS:
             verdict = _segment_verdict(domain, seg)
+            held = None if verdict else _segment_hold(domain, seg)
+            if held:
+                sys.stderr.write(f"[generate] {cid} ({domain}): {held}\n")
+                _write_held(c, seg, "", reason=held)
+                continue
             if verdict:
                 tech_line, _ = _cached_tech(domain)
                 route = erp_route(seg, verdict, tech_line)
