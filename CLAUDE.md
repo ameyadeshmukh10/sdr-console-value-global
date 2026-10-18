@@ -299,7 +299,8 @@ triggers, via the Anthropic Messages API + server-side `web_search` (the same ch
   Failures/empty outputs are stderr-logged and recorded in `news_detail.composite`
   ({ok, stored, error}); a max_tokens-truncated output is never stored;
   `NEWS_COMPOSITE_SIGNAL=0` kills it. **UI Refresh on a found-trigger account
-  re-composes** (`recompose_domain`, force-overwrite, no web search) instead of the
+  re-composes** (`recompose_domain`, overwrite via compare-and-swap on the
+  pre-compose snapshot, no web search) instead of the
   research-only refresh, whose generic "company anchor -" line once clobbered a
   trigger composite (2026-10); a compose failure keeps the old signal. Repair any
   clobbered rows with `--recompose --replace-generic [--dry-run]`. Both prompts anchor today's date (UTC — matches

@@ -1483,6 +1483,8 @@ def recompose_domain(domain):
     rebuild the composite from the stored verdicts + current tech/hiring lines
     (one no-search call) and store it OVERWRITING the current signal — the
     research-only refresh would replace it with a generic company anchor.
+    The overwrite is compare-and-swap against the pre-compose snapshot: if
+    the signal changed during the call, the newer research wins (stored=False).
     Returns a result dict; None when the account has no found triggers (the
     caller falls back to the research refresh). A compose failure stores
     nothing and returns {"error": ...} — the existing signal is kept."""
@@ -1510,9 +1512,11 @@ def recompose_domain(domain):
     try:
         stored = db.upsert_composite_signal(conn, domain, text, model=model,
                                             has_recent=_composite_has_recent(triggers),
-                                            force=True)
+                                            expect_signal=row.get("signal"))
     finally:
         conn.close()
+    if not stored:
+        log(f"composite for {domain}: signal changed during compose — kept the newer one")
     return {"domain": domain, "company_name": row.get("company_name"), "signal": text,
             "source": "news_composite", "stored": stored, "web_searches": 0}
 
@@ -1525,7 +1529,9 @@ def recompose_stored(limit=None, force=False, replace_generic=False, dry_run=Fal
     (real spend — use --limit). Fill-only semantics, same as a live scan —
     except `replace_generic`, which also overwrites a FRESH generic anchor
     ("company anchor - …" / "no recent signal …", see is_generic_signal) on a
-    found-trigger row. `dry_run` lists the rows it would compose, no API calls."""
+    found-trigger row — compare-and-swap against this run's snapshot, so an
+    anchor replaced by real research mid-run is left alone. `dry_run` lists
+    the rows it would compose, no API calls."""
     ok, reason = news_available()
     if not ok:
         raise RuntimeError(f"news research unavailable: {reason}")
@@ -1568,10 +1574,13 @@ def recompose_stored(limit=None, force=False, replace_generic=False, dry_run=Fal
             pass
         conn = _db()
         try:
+            cas = {"expect_signal": r.get("signal")} if generic else {}
             if db.upsert_composite_signal(
                     conn, r["domain"], text, model=model,
-                    has_recent=_composite_has_recent(triggers), force=generic):
+                    has_recent=_composite_has_recent(triggers), **cas):
                 summary["stored"] += 1
+            elif generic:
+                summary["skipped_changed"] = summary.get("skipped_changed", 0) + 1
         finally:
             conn.close()
         log(f"[{summary['attempted']}] {r['domain']}: composed")
