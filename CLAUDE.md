@@ -348,6 +348,37 @@ triggers, via the Anthropic Messages API + server-side `web_search` (the same ch
   erp-trigger path — but since 2026-09 it DOES reach news research indirectly: a fresh
   composite in `signal` is reused as its cached research (see the composite bullet).
 
+## Signal-to-track routing — retirement vs archiving (added 2026-10)
+
+From Value Global's "Signal Messaging Feedback" (2026-10-09): a company in an
+acquisition, divestiture or ERP switch is STOPPING an old system, so it gets the
+application-**retirement** pitch, never the staying-on-EBS archiving pain.
+
+- **Router:** `generate_batch.erp_route(segment, verdict, tech_line)` (deterministic) →
+  `{track, side, licensing, target, legacy, entity, closed, basis, reason}`, stored on the
+  asset as `route` + `track` and in the signal line (`M&A carve-out [retirement, acquirer]: …`).
+  Tracks: `retirement` (ma_carveout acquirer/acquired; erp_migration), `data_split`
+  (divestiture/spinoff/carve-out: seller, divested_entity, carveout_buyer), `archiving`
+  (license_audit / ebs_oci / ebs_performance — unchanged `ERP_SYSTEM`), `hold`
+  (acquirer whose target stays a separate unit → stub asset `held:true`, ingest marks the
+  contact `skipped` "held: …"). Licensing claim allowed only on retirement when the new
+  ERP is non-Oracle (Fusion or unknown target → no licensing; data_split → none). The old
+  system is named only when confirmed (`details.legacy_erp` or the tech scan).
+- **Research fields** (`news_signals` briefs): ma_carveout adds `prospect_role`,
+  `integration` (consolidate|separate_unit), `closed`; erp_migration adds `legacy_erp` and
+  accepts any new ERP (Workday, Dynamics, …). Verdicts researched before these fields
+  route by `deal_type` + headline regex (`basis:"inferred"`). New guard
+  `hold_separate_unit` downgrades separate-unit acquisitions (also via `--refloor`).
+- **Copy + lint:** `ERP_RETIRE_SYSTEM` (sections 3-5 of the feedback: core idea, the
+  three cleared proofs with exact attribution, touch 1 ends on a question, 20-minute
+  retirement call in touches 2 AND 3, plain breakup, no links/assessment/sample
+  report/white paper). `_lint_retire` enforces it, incl. staying-pain words, any `%`,
+  "clock … announced", and licensing when the route forbids it. `lint_assets` passes
+  `asset["route"]`; assets without a route lint exactly as before.
+- **Gotcha:** operator play overrides (`erp_plays.json` on the volume) for `ma_carveout` /
+  `erp_migration` still win per field — reset them in the Orchestration view if they hold
+  the old archiving framing.
+
 ## Agent studio — editable instructions (Orchestration view, added 2026-09)
 
 The Orchestration view is the operator's editing surface for how the AI SDR thinks:

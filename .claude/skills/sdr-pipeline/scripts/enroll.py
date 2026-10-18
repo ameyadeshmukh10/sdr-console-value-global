@@ -111,13 +111,13 @@ def save_state(state):
     STATE_FILE.write_text(json.dumps(state, indent=2))
 
 
-def lint_email_assets(email, variant=None):
+def lint_email_assets(email, variant=None, route=None):
     """Return list of issues across the 4 emails (empty = pass). Variant-aware:
     delegates to generate_batch.lint_assets so erp-trigger assets are checked
     against the trigger linter, not the canonical-path structure rules — the
     same source of truth generation and ingest use."""
     import generate_batch as G
-    return G.lint_assets({"variant": variant or "value-give", "email": email})
+    return G.lint_assets({"variant": variant or "value-give", "email": email, "route": route})
 
 
 def bison_custom_vars(email):
@@ -207,7 +207,7 @@ def main():
         email, linkedin = asset.get("email", {}), asset.get("linkedin", {})
 
         if not no_lint:
-            issues = lint_email_assets(email, variant=asset.get("variant"))
+            issues = lint_email_assets(email, variant=asset.get("variant"), route=asset.get("route"))
             if issues:
                 res["counts"]["skipped_lint"] = 1
                 res["logs"].append(f"  ✗ {contact.get('email')} [{contact.get('persona')}] FAILED lint:")

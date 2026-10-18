@@ -190,29 +190,31 @@ ERP_VARIANT = "erp-trigger"
 ERP_PLAYS = {
     "ma_carveout": {
         "label": "M&A carve-out",
-        "problem": "When a company divests or acquires, the separated entity keeps running on the "
-                   "parent's ERP through a 6-12 month Transition Services Agreement window. TSA data "
-                   "is messy and commingled, nobody wants to keep running and paying for two ERPs, "
-                   "and the clock to separate the data cleanly started the day the deal was announced.",
-        "solution": "ERP Data Retirement helps the separated entity extract, segregate, and retire or "
-                    "archive its data clean, so it can stand up independently on its own ERP instance "
-                    "(or move to a new system) before the TSA window closes.",
-        "opener": "the deal itself (the divestiture / carve-out / spinoff / acquisition found), tied "
-                  "to the TSA and data-separation clock it starts",
+        "problem": "An acquisition, divestiture or carve-out leaves an ERP that someone wants to stop "
+                   "running. An acquirer folding the target in ends up with the acquired company's ERP "
+                   "still on, kept mainly so finance and audit can pull old reports. A divested entity "
+                   "or carve-out has its finance and operations history sitting inside the parent's "
+                   "ERP and has to get it out, with transactions still linked, before the transition "
+                   "period (which runs from closing) ends.",
+        "solution": "Application retirement on ROAD: the old system's full history moves into a "
+                    "searchable archive with the business context and the reports finance and audit "
+                    "still use, so the old ERP can be switched off. For a divestiture, ROAD first "
+                    "extracts only the separating entity's records as complete business objects, so it "
+                    "stands up on its own data, then the leftover copy is retired.",
+        "opener": "the deal itself (what was agreed or closed, and when), tied to what happens to the "
+                  "old ERP once integration settles (acquirer) or to getting the entity's history out "
+                  "before the transition period ends (divestiture / carve-out)",
     },
     "erp_migration": {
         "label": "ERP migration",
-        "problem": "They are moving to a SaaS ERP (Fusion Cloud / S/4HANA), but the new platform only "
-                   "accepts open items and recent data. Twenty years of legacy transactional history "
-                   "will not load, yet it stays under audit, tax, and legal-retention obligations once "
-                   "the old system is switched off, and no implementation partner wants to own that "
-                   "question.",
-        "solution": "ERP Data Retirement extracts and archives the full legacy history into a "
-                    "compliant, independently queryable archive that lives outside the new ERP, so "
-                    "they can retire the old system entirely, satisfy retention and audit "
-                    "requirements, and go live on the new platform clean.",
-        "opener": "their ERP modernization program (platform and stage when known), tied to the "
-                  "legacy-history question the new platform will not take",
+        "problem": "They are switching to a new ERP. After go-live the old environment usually stays "
+                   "on for years: nobody transacts in it, but finance and audit still need its "
+                   "history, so it keeps costing money to run for lookups.",
+        "solution": "Application retirement on ROAD: retire the old system and move its history into "
+                    "a searchable archive with the reports teams still use. Planned before cutover, "
+                    "only active data has to migrate.",
+        "opener": "their move to the new ERP (platform and stage when known), tied to what happens "
+                  "to the old system after cutover",
     },
     "license_audit": {
         "label": "License audit",
@@ -346,6 +348,267 @@ plus 3 LinkedIn touches anchored on that trigger.
 """ + OUTPUT_SCHEMA
 
 
+# ----------------------------------------------------------------------------
+# Signal-to-track routing (Value Global "Signal Messaging Feedback", 2026-10-09).
+# A company in an acquisition, a divestiture or an ERP switch is trying to STOP
+# running an old system, so it gets the application-RETIREMENT pitch, not the
+# live-archiving (staying-on-EBS) pain. Tracks:
+#   retirement  — M&A acquirer (or acquired whole), ERP switch. Licensing claim
+#                 allowed except when the new ERP is Oracle Fusion (or unknown).
+#   data_split  — divestiture / spinoff / carve-out: extract the separating
+#                 entity's data, then retire the leftover copy.
+#   archiving   — license_audit / ebs_oci / ebs_performance: unchanged
+#                 (ERP_SYSTEM above).
+#   hold        — acquired company stays a separate unit: nothing to retire,
+#                 never generated.
+# erp_route() is deterministic; the decision is stored on the asset as
+# `route` so the client can review it per account.
+# ----------------------------------------------------------------------------
+RETIRE_TRACKS = ("retirement", "data_split")
+_ROLES = ("acquirer", "acquired", "seller", "divested_entity", "carveout_buyer")
+_ACQUIRED_RX = re.compile(r"\b(to be|agreed to be|will be|is being|being) acquired by\b|"
+                          r"\bacquired by\b|\bsold to\b|\bto sell itself\b", re.I)
+_SPUN_FROM_RX = re.compile(r"\b(spun|spin(s|ning)?)[- ]?off\s+from\b|\bseparat\w+\s+from\b|"
+                           r"\bcarved?[- ]?out\s+(of|from)\b", re.I)
+_UNIT_BUY_RX = re.compile(r"\bacqui\w+\b.{0,80}\b(division|unit|business|segment|carve-?out)\b"
+                          r".{0,60}\bfrom\b", re.I)
+_SEPARATE_RX = re.compile(r"separate (business |operating )?unit|stand-?alone|"
+                          r"independent(ly)? (subsidiary|operat\w*|brand|business)|"
+                          r"operate (independently|as a separate)", re.I)
+_ORACLE_LEGACY = ("e-business suite", "ebs", "peoplesoft", "jd edwards", "jde", "oracle")
+
+
+def _legacy_erp(details, tech_line):
+    """The old system's name when CONFIRMED (verdict legacy_erp or the
+    deterministic tech scan), else '' — never guessed (feedback issue 8)."""
+    legacy = str(details.get("legacy_erp") or "").strip()
+    if legacy:
+        return legacy
+    low = (tech_line or "").lower()
+    for key, name in (("e-business suite", "Oracle E-Business Suite"),
+                      ("peoplesoft", "PeopleSoft"), ("jd edwards", "JD Edwards")):
+        if key in low:
+            return name
+    return ""
+
+
+def erp_route(segment, verdict, tech_line=None):
+    """Route one trigger verdict to a messaging track. Returns
+    {track, side, licensing, target, legacy, entity, closed, basis, reason}.
+    `basis` is 'verdict' when the research extracted the deal side / target,
+    'inferred' when it came from deal_type + headline wording (verdicts
+    researched before the side fields existed)."""
+    d = (verdict or {}).get("details") or {}
+    if not isinstance(d, dict):
+        d = {}
+    legacy = _legacy_erp(d, tech_line)
+    route = {"track": "archiving", "side": "", "licensing": False, "target": "",
+             "legacy": legacy, "entity": str(d.get("entity") or "").strip(),
+             "closed": d.get("closed") if isinstance(d.get("closed"), bool) else None,
+             "basis": "verdict", "reason": ""}
+    if segment == "ma_carveout":
+        role = str(d.get("prospect_role") or "").strip().lower()
+        head = f"{verdict.get('headline', '')}"
+        if role not in _ROLES:
+            route["basis"] = "inferred"
+            deal = str(d.get("deal_type") or "").strip().lower()
+            if _ACQUIRED_RX.search(head):
+                role = "acquired"
+            elif deal in ("divestiture", "spinoff"):
+                role = "divested_entity" if _SPUN_FROM_RX.search(head) else "seller"
+            elif _UNIT_BUY_RX.search(head):
+                role = "carveout_buyer"
+            else:
+                role = "acquirer"
+        route["side"] = role
+        integ = str(d.get("integration") or "").strip().lower()
+        separate = integ == "separate_unit" or (
+            not integ and role == "acquirer"
+            and _SEPARATE_RX.search(f"{head} {verdict.get('summary', '')}"))
+        if role == "acquirer" and separate:
+            route.update(track="hold", reason="acquired company runs as a separate unit: "
+                                              "no consolidation, nothing to retire")
+        elif role in ("acquirer", "acquired"):
+            route.update(track="retirement", licensing=True,
+                         reason=f"M&A, prospect is the {role}: consolidate and retire")
+        else:
+            route.update(track="data_split",
+                         reason=f"M&A, prospect is the {role.replace('_', ' ')}: "
+                                "extract the entity's data, then retire the leftover copy")
+    elif segment == "erp_migration":
+        target = str(d.get("platform") or "").strip()
+        route.update(track="retirement", side="erp_switch", target=target)
+        tl = target.lower()
+        if "fusion" in tl or ("oracle" in tl and "cloud" in tl):
+            route["reason"] = "ERP switch to Oracle Fusion: retirement, no licensing claim"
+        elif not target or tl == "other":
+            route["reason"] = "ERP switch, target unknown: retirement, no licensing claim"
+        else:
+            route.update(licensing=True,
+                         reason=f"ERP switch to {target} (non-Oracle): retirement")
+    else:
+        route["reason"] = "staying on the ERP: archiving track (unchanged)"
+    return route
+
+
+_SIDE_GUIDE = {
+    "acquirer": (
+        "They are the ACQUIRER, folding {entity} into their own operations. Frame: once the "
+        "integration settles, most acquirers find the acquired company's ERP still running, kept "
+        "on mainly so finance and audit can pull old reports. Retire it, keep its history and "
+        "reports searchable. They are CONSOLIDATING: never use separation, carve-out, or "
+        "'stand up independently' language."),
+    "acquired": (
+        "They are being ACQUIRED whole. Frame: once they move onto the buyer's systems, their own "
+        "ERP usually stays on for lookups; its history and reports have to survive the switch off. "
+        "Never use 'stand up independently' language."),
+    "seller": (
+        "They are the SELLER: {entity} is separating from them. Frame: {entity}'s finance and "
+        "operations history sits inside their ERP and has to come out with transactions still "
+        "linked; ROAD extracts only {entity}'s records as complete business objects, and the "
+        "leftover copy is then retired rather than kept running."),
+    "divested_entity": (
+        "They ARE the separating entity, leaving the parent. Frame: their finance and operations "
+        "history sits inside the parent's ERP; how do they get it out, with transactions still "
+        "linked, before the transition period ends, so they stand up on their own data."),
+    "carveout_buyer": (
+        "They are BUYING a carve-out ({entity}) out of a parent under a transition period. Frame: "
+        "{entity}'s history sits in the seller's ERP; get only its records out, transactions still "
+        "linked, before the transition period ends; the leftover copy is then retired."),
+    "erp_switch": (
+        "They are moving to {target}. Frame: after go-live the old environment usually stays on "
+        "for years; nobody transacts in it, but finance and audit still need its history. Retire "
+        "it into a searchable archive with the reports teams still use; the better time to plan "
+        "it is before cutover, so only active data has to migrate."),
+}
+
+
+def route_block(route):
+    """The routing instructions for the retirement / data-split prompt."""
+    side = route.get("side") or ""
+    entity = route.get("entity") or ("the acquired company" if side in ("acquirer", "acquired")
+                                     else "the separating entity")
+    target = route.get("target") or "a new ERP"
+    lines = [f"# Messaging track: {route['track'].upper().replace('_', ' ')} "
+             f"(deal side / situation: {side.replace('_', ' ') or 'n/a'})",
+             "- " + _SIDE_GUIDE.get(side, _SIDE_GUIDE["acquirer"]).format(entity=entity,
+                                                                          target=target)]
+    legacy = route.get("legacy") or ""
+    if route.get("licensing"):
+        oracle = any(k in legacy.lower() for k in _ORACLE_LEGACY)
+        lines.append(
+            "- Licensing: you MAY say the retired system's license and support costs go away "
+            "(that is what retirement does). "
+            + ("Since the old system is an Oracle product, 'Oracle license and support' is fine."
+               if oracle else
+               "The old system is NOT confirmed as Oracle: say 'license and support on the old "
+               "system', never 'Oracle license'."))
+    else:
+        lines.append(
+            "- Licensing: do NOT mention license, licensing, or support contracts at all "
+            f"({route.get('reason') or 'not cleared for this track'}). Lead on the cost of keeping "
+            "the old system alive just for lookups, and on retiring it before cutover so only "
+            "active data moves." if side == "erp_switch" else
+            "- Licensing: do NOT mention license or licensing on this track; the story is a clean "
+            "split with transactions still linked, then retiring the leftover copy.")
+    if legacy:
+        lines.append(f"- The old system is confirmed as {legacy}: you may name it.")
+    else:
+        lines.append("- The old system is NOT confirmed: never name an ERP product for it "
+                     "(say 'the old ERP', 'that system').")
+    if side != "erp_switch":
+        closed = route.get("closed")
+        lines.append(
+            "- Transition periods run from CLOSING, never from announcement; never write that a "
+            "clock started when the deal was announced. "
+            + ("The research confirms the deal has closed."
+               if closed is True else
+               "The research does NOT confirm the deal has closed: say it was agreed or "
+               "announced, never that it closed."))
+    return "\n".join(lines) + "\n"
+
+
+ERP_RETIRE_SYSTEM = """\
+You are an expert B2B SDR copywriter for Value Global, delivering application retirement on the
+ROAD platform by InfoCorvus.
+
+# What we sell on this track: application RETIREMENT
+Core idea: retire the old ERP, keep its reports, stop paying to run it. This prospect is in an
+acquisition, a divestiture, or an ERP switch: they are trying to STOP running an old system. Their
+question: how do we switch the old ERP off without losing the history and reports finance, audit
+and legal still need, and without paying to keep it alive?
+What ROAD does, in buyer language (never invent beyond this):
+- Moves the old system's full history into a searchable archive with the business context intact:
+  look up a supplier and see its purchase orders, invoices, payments and approvals together.
+- A typical Oracle EBS retirement includes 20 to 30 pre-built read-only reports. Never inflate it.
+- Access is role-based and audit-ready, so the old application can be switched off.
+- For a divestiture or carve-out: extracts one entity's records as complete business objects (an
+  invoice carries its lines, tax, payments and accounting entries), so nothing is orphaned; the
+  leftover copy is then retired.
+- Works across Oracle EBS, PeopleSoft, JD Edwards and SAP. Lead with Oracle EBS only where the
+  account is confirmed to run it. ROAD cannot archive out of Oracle Fusion or any cloud ERP.
+
+Proof you may use, at most ONE per email and NONE in touch 1, worded exactly:
+- "InfoCorvus, whose ROAD platform we deliver, puts it at $1M to $6M a year per retired legacy
+  system" (always with that attribution; never as a Value Global promise).
+- "One Oracle EBS environment of 2 TB was retired in a month" (anonymous; never a customer name).
+- 20 to 30 pre-built reports per typical EBS retirement.
+NO other percentage, savings, or case figure. Never "up to 85%".
+
+NEVER pitch the pain of a company STAYING on its ERP: no slow queries, bloated backups, dev or test
+clones, month-end close drag, database performance, or "dormant data". Vocabulary: the offer is
+RETIREMENT ("retire", "switch off"); "archive" only as the place the history lives, never
+"archiving" as the offer.
+
+# Your task
+You are GIVEN a VERIFIED buying trigger researched for this account (with its source and date), its
+messaging track and deal side, and the sales play. Do NOT search the web. Write a 4-touch cold
+EMAIL sequence plus 3 LinkedIn touches anchored on that trigger.
+
+# Write rules
+- 35-110 words per email. Two or three short paragraphs separated by a blank line. ONE idea and
+  ONE ask per email. Open EVERY email with the contact's first name and a comma.
+- Every touch lands as its OWN standalone email, never a threaded reply: a DISTINCT subject per
+  touch, no "RE:" or "Fwd:", never reuse one. Roughly 3 to 8 words, plain and specific: subject 1
+  the event and the old system, subject 2 retiring it without losing the reports (or the clean
+  split), subject 3 the 20 minutes, subject 4 closing the loop.
+- Touch 1 (40-80 words): open on the trigger event (what actually happened, with its month or
+  date). Then one or two sentences on what TYPICALLY happens to the old system in this situation,
+  phrased as a pattern ("most acquirers find...", "the old environment usually..."), never as a
+  fact about them. END on ONE genuine question about their plan for that system or its history.
+  No meeting ask, no offer, no proof figure, no link.
+- Touch 2 (60-110 words): a different angle from touch 1. Lay out the usual options (keep paying
+  to run the old ERP for years, or push history into a new system not built to hold it, or for a
+  split a scripted extract that breaks the links between invoices, payments and the ledger)
+  against retiring it into a searchable archive that carries the reports. At most one proof line.
+  Close with a 20-minute ask ("Would 20 minutes be worth it to see whether that applies to
+  <Company / the system>?").
+- Touch 3 (40-80 words): the 20-minute retirement call, covering three things: which systems can
+  be switched off, which reports have to survive, and what running the old system costs until
+  then. Name two windows in prose as weekday plus time of day only ("Tuesday morning or Thursday
+  afternoon work on my end"); never "this week", today, tomorrow, or a calendar date; never a
+  booking link.
+- Touch 4 (30-60 words), the breakup: "I will stop here." If the question of what to do with the
+  old system comes up later this year, reply any time and we can pick it up. "Happy to stay
+  connected either way." No new argument, no asset, no meeting ask.
+- NO links on this track. Never offer an assessment, a sample report, a white paper, case
+  studies, references, or "how similar companies handled it".
+- The trigger verdict, the routing below, and a detected-ERP line (when provided) are your ONLY
+  facts about this company. Never invent numbers, dates, names, systems, or internal details. If
+  something is inferred, write it as typical ("most acquirers find..."), never as known. Never
+  name an ERP product for the old system unless the routing says it is confirmed.
+- Never open with "Congrats". No em or en dashes. NO sign-off or trailing name. No hype words
+  (revolutionary, game-changing, cutting-edge, seamless, robust, supercharge, unlock, transform).
+  Never write "purge", "estate", "AI-powered", or any production-access reassurance. No pricing.
+  Vary the wording: let the research supply the specifics instead of stock lines.
+- LinkedIn: li_connect is a <=280-char note that observes the event and connects, no pitch, never
+  tells them what they face ("huge lift ahead"); li_msg1 a short question about the old system's
+  plan; li_msg2 offers the 20-minute retirement call. Same vocabulary: retire, never archiving.
+- Set the `signal` JSON field to the trigger finding with its month/date.
+
+""" + OUTPUT_SCHEMA
+
+
 def erp_play(segment):
     """The effective play for a segment: the committed text with any operator
     edits (Orchestration view) merged per field. Falls back to the committed
@@ -382,7 +645,7 @@ def persona_framing(persona):
     return " ".join(parts)
 
 
-def build_erp_user(contact, segment, verdict, tech_line=None, prior_issues=None):
+def build_erp_user(contact, segment, verdict, tech_line=None, prior_issues=None, route=None):
     play = erp_play(segment)
     details = verdict.get("details") or {}
     base = (
@@ -402,9 +665,13 @@ def build_erp_user(contact, segment, verdict, tech_line=None, prior_issues=None)
         f"- What ERP Data Retirement does about it: {play['solution']}\n"
         f"- Email 1 opens on: {play['opener']}\n"
     )
-    mention = erp_mention_block(tech_line)
-    if mention:
-        base += "\n" + mention
+    route = route or erp_route(segment, verdict, tech_line)
+    if route["track"] in RETIRE_TRACKS:
+        base += "\n" + route_block(route)
+    else:
+        mention = erp_mention_block(tech_line)
+        if mention:
+            base += "\n" + mention
     base += "\nUse the contact's first name in the copy. Write the sequence. Return only the JSON object."
     if prior_issues:
         base += ("\n\nYour previous attempt FAILED these checks:\n- "
@@ -413,21 +680,106 @@ def build_erp_user(contact, segment, verdict, tech_line=None, prior_issues=None)
     return base
 
 
-def erp_signal_line(segment, verdict):
+def erp_signal_line(segment, verdict, route=None):
     """The auditable `signal` string stored on the asset (mirrors the cached-
     signal format): trigger label + headline + date."""
     play = ERP_PLAYS.get(segment) or {}
-    line = f"{play.get('label', segment)}: {verdict.get('headline', '')}".strip().rstrip(":")
+    label = play.get("label", segment)
+    if route and route.get("track") in RETIRE_TRACKS:
+        label += f" [{route['track'].replace('_', ' ')}"
+        label += f", {route['side'].replace('_', ' ')}]" if route.get("side") else "]"
+    line = f"{label}: {verdict.get('headline', '')}".strip().rstrip(":")
     if verdict.get("date"):
         line += f" ({verdict['date']})"
     return line
 
 
-def lint_erp(email):
+def lint_erp(email, route=None):
     """Structural checks for the ERP trigger sequence: length band, no dashes /
     sign-off / pricing / hype, soft question in touch 1, breakup in touch 4.
-    No metric requirement — the trigger verdict is the anchor, not proof stats."""
+    No metric requirement — the trigger verdict is the anchor, not proof stats.
+    Retirement / data-split routes get the retirement structure + claim rules."""
+    route = route if isinstance(route, dict) else {}
+    if route.get("track") in RETIRE_TRACKS:
+        return _lint_retire(email, route)
     return _lint_short(email, lo=35, hi=110)
+
+
+# Retirement-track claim rules (Value Global feedback 2026-10-09).
+_STAYING_PAIN = re.compile(r"\bslow(er)? quer|\bbackups?\b|\bclon(e|es|ing)\b|month[- ]end|"
+                           r"\bdormant\b|\bperformance\b", re.I)
+_ARCHIVING_OFFER = re.compile(r"\barchiving\b|\bassessment\b|\bwhite ?paper\b", re.I)
+_LICENSE = re.compile(r"\blicen[cs]", re.I)
+_PERCENT = re.compile(r"\d\s?%|\bpercent\b", re.I)
+# Transition periods run from CLOSING (client feedback issue 6).
+_CLOCK_AT_ANNOUNCE = re.compile(r"\bclock\b[^.?!\n]{0,60}\bannounce", re.I)
+
+
+def _lint_retire(email, route):
+    """The retirement / data-split sequence: shared claim discipline, touch 1
+    ends on a genuine question (open-ended allowed) with no meeting ask,
+    touches 2 AND 3 ask for the 20-minute retirement call, touch 4 a plain
+    breakup (no asset). Bans the staying-on-the-ERP pain, archiving offers
+    (assessment / white paper / sample report / links), any percentage, and
+    licensing where the route forbids it (Fusion / unknown target, splits)."""
+    steps = []
+    for i in range(1, 5):
+        subj, body = email.get(f"subject{i}", ""), email.get(f"body{i}", "")
+        if not subj or not body:
+            return [f"missing subject{i}/body{i}"]
+        steps.append({"n": i, "subject": subj, "body": body})
+    issues = list(L.sequence_issues(steps))
+    for s in steps:
+        b, n = s["body"], s["n"]
+        wc = _wc(b)
+        if not (35 - 5 <= wc <= 110 + 10):
+            issues.append(f"step{n}: word count {wc} (need 35-110)")
+        if L.DASH.search(b):
+            issues.append(f"step{n}: em/en dash present (use commas, colons or a full stop)")
+        lines = [ln.strip() for ln in b.splitlines() if ln.strip()]
+        if lines and L.SIGNOFF_LINE.match(lines[-1]):
+            issues.append(f"step{n}: trailing sign-off/name (end on the ask, no sign-off)")
+        for rx, msg in ((L.PRICING, "pricing language in a cold step"),
+                        (L.BANNED, "banned term/phrase (see offer.md ban list)"),
+                        (_HYPE, "hype word"),
+                        (L.ANALYST_CLAIM, "analyst citation"),
+                        (L.ORACLE_RELATIONSHIP, "Oracle co-sell/partner claim"),
+                        (L.RECIPIENT_ASSERTION, "asserts a fact about the recipient"),
+                        (L.BOOKING, "booking/scheduling link or tool"),
+                        (L.CASE_STUDY, "offers a case study / 'how similar companies handled it'"),
+                        (L.FORBIDDEN_CTA, "offers an uncleared asset (sample report / pilot)"),
+                        (_STAYING_PAIN, "staying-on-the-ERP pain (queries/backups/clones/"
+                                        "month-end/dormant/performance) on the retirement track"),
+                        (_ARCHIVING_OFFER, "archiving offer/vocabulary on the retirement track "
+                                           "(say retire; no assessment or white paper)"),
+                        (_PERCENT, "percentage figure on the retirement track"),
+                        (_CLOCK_AT_ANNOUNCE, "says a clock started at announcement (transition "
+                                             "periods run from closing)")):
+            if rx.search(b):
+                issues.append(f"step{n}: {msg}")
+        if L.URL_CANDIDATE.search(b):
+            issues.append(f"step{n}: link present (no links on the retirement track)")
+        if L.INFOCORVUS_FIGURES.search(b) and "infocorvus" not in b.lower():
+            issues.append(f"step{n}: InfoCorvus figure without the vendor attribution")
+        if not route.get("licensing") and _LICENSE.search(b):
+            issues.append(f"step{n}: mentions licensing ({route.get('reason') or 'not allowed'})")
+    b1 = steps[0]["body"]
+    if not b1.rstrip().endswith("?"):
+        issues.append("step1: must end on a question about their plan for the old system")
+    if L.MEETING.search(b1):
+        issues.append("step1: asks for a call (touch 1 never asks for a meeting)")
+    if L.INFOCORVUS_FIGURES.search(b1) or re.search(r"\b2\s?TB\b", b1, re.I):
+        issues.append("step1: proof figure in touch 1 (none until touch 2)")
+    for s in steps[1:3]:
+        if not L.MEETING.search(s["body"]):
+            issues.append(f"step{s['n']}: must ask for the 20-minute retirement call")
+    if L.STALE_WINDOW.search(steps[2]["body"]):
+        issues.append(f"step3: stale time reference "
+                      f"'{L.STALE_WINDOW.search(steps[2]['body']).group(0)}' (name windows as "
+                      "weekday + time of day only)")
+    if not L.BREAKUP.search(steps[-1]["body"]):
+        issues.append("step4: final step is not a breakup")
+    return issues
 
 
 def _segment_verdict(domain, segment):
@@ -448,21 +800,40 @@ def _segment_verdict(domain, segment):
     return v if isinstance(v, dict) and v.get("found") else None
 
 
+def _write_held(contact, segment, signal, route):
+    """A held account (acquired company stays a separate unit) gets a stub
+    asset, so ingest records it as `skipped` with the reason instead of a
+    bare "no generated file" failure — and any stale copy is overwritten."""
+    _atomic_write(contact["contact_id"], {
+        "contact_id": contact["contact_id"], "persona": contact.get("persona", "it-leadership"),
+        "variant": ERP_VARIANT, "segment": segment, "signal": signal, "held": True,
+        "track": "hold", "route": route, "email": {}, "linkedin": {}})
+
+
 def generate_contact_erp(contact, segment, verdict, client, write=True, tech_line=None):
     """Generate one trigger-anchored contact (write-only, no web search — the
     verdict IS the research). Same retry/lint/write contract as
     generate_contact; the asset carries variant 'erp-trigger'."""
     cid, persona = contact["contact_id"], contact.get("persona", "it-leadership")
-    signal = erp_signal_line(segment, verdict)
+    route = erp_route(segment, verdict, tech_line)
+    signal = erp_signal_line(segment, verdict, route)
+    if route["track"] == "hold":
+        if write:
+            _write_held(contact, segment, signal, route)
+        return {"status": "failed", "asset": None, "signal": signal,
+                "company": contact.get("company", ""), "web_searches": 0, "attempts": 0,
+                "issues": [f"held: {route['reason']}"], "route": route,
+                "cache_read": 0, "cache_write": 0}
+    system = ERP_RETIRE_SYSTEM if route["track"] in RETIRE_TRACKS else ERP_SYSTEM
     issues, last_asset = ["no output"], None
     cache_read = cache_write = 0
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
             res = client.complete(
-                ERP_SYSTEM,
+                system,
                 build_erp_user(contact, segment, verdict, tech_line=tech_line,
-                               prior_issues=None if attempt == 1 else issues),
+                               prior_issues=None if attempt == 1 else issues, route=route),
                 use_web_search=False, max_tokens=8192,
             )
             u = res.get("usage", {})
@@ -480,10 +851,11 @@ def generate_contact_erp(contact, segment, verdict, client, write=True, tech_lin
         last_asset = {
             "contact_id": cid, "persona": persona, "variant": ERP_VARIANT,
             "segment": segment, "signal": signal,
+            "track": route["track"], "route": route,
             "email": data.get("email", {}) or {},
             "linkedin": data.get("linkedin", {}) or {},
         }
-        issues = lint_erp(last_asset["email"])
+        issues = lint_erp(last_asset["email"], route)
         if not issues:
             if write:
                 _atomic_write(cid, last_asset)
@@ -723,7 +1095,10 @@ LINTERS = {"value-give": lint_email, "earn": lint_email, "show": lint_email,
 
 def lint_assets(asset):
     """Variant-aware lint used by both generation and ingest (reads asset['variant'])."""
-    fn = LINTERS.get(asset.get("variant", DEFAULT_VARIANT), lint_email)
+    variant = asset.get("variant", DEFAULT_VARIANT)
+    if variant == ERP_VARIANT:
+        return lint_erp(asset.get("email", {}), asset.get("route"))
+    fn = LINTERS.get(variant, lint_email)
     return fn(asset.get("email", {}))
 
 
@@ -1119,14 +1494,20 @@ def prepare_batch_requests(contacts, knowledge, client=None, variant=DEFAULT_VAR
             verdict = _segment_verdict(domain, seg)
             if verdict:
                 tech_line, _ = _cached_tech(domain)
+                route = erp_route(seg, verdict, tech_line)
+                if route["track"] == "hold":
+                    sys.stderr.write(f"[generate] {cid} held ({domain}): {route['reason']}\n")
+                    _write_held(c, seg, erp_signal_line(seg, verdict, route), route)
+                    continue
+                system = ERP_RETIRE_SYSTEM if route["track"] in RETIRE_TRACKS else ERP_SYSTEM
                 requests.append({"custom_id": cid, "params": client.build_body(
-                    ERP_SYSTEM, build_erp_user(c, seg, verdict, tech_line=tech_line),
+                    system, build_erp_user(c, seg, verdict, tech_line=tech_line, route=route),
                     use_web_search=False, max_tokens=8192, cache_ttl="1h")})
                 # cached_signal = the verdict line, so process_batch_result stores
                 # it verbatim and never re-caches it as a researched signal
                 manifest[cid] = {"contact": c, "domain": domain, "variant": ERP_VARIANT,
-                                 "segment": seg, "was_combined": False,
-                                 "cached_signal": erp_signal_line(seg, verdict)}
+                                 "segment": seg, "route": route, "was_combined": False,
+                                 "cached_signal": erp_signal_line(seg, verdict, route)}
                 continue
             sys.stderr.write(f"[generate] no stored {seg!r} verdict for {domain} — "
                              f"batching {cid} through the default path\n")
@@ -1171,6 +1552,9 @@ def process_batch_result(custom_id, result, manifest):
         "signal": (cached_signal or data.get("signal") or "").strip(),
         "email": data.get("email", {}) or {}, "linkedin": data.get("linkedin", {}) or {},
     }
+    if entry.get("route"):
+        asset.update(segment=entry.get("segment"), track=entry["route"]["track"],
+                     route=entry["route"])
     # cache the researched signal (combined requests) even if the copy fails lint
     if entry["was_combined"] and domain and asset["signal"]:
         has_recent = not asset["signal"].lower().startswith("no recent signal")

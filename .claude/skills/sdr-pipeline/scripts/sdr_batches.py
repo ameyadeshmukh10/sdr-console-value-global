@@ -89,7 +89,7 @@ def cmd_ingest(args):
     if not rows:
         print(f"batch {args.batch_id}: no contacts")
         return 1
-    gen = bad = 0
+    gen = bad = held = 0
     generated_assets = []  # (contact_id, asset) that ingested clean
     for r in rows:
         p = db.GEN_DIR / f"{r['contact_id']}.json"
@@ -99,6 +99,11 @@ def cmd_ingest(args):
             continue
         try:
             asset = json.loads(p.read_text())
+            if asset.get("held"):  # routing held the account (e.g. separate unit)
+                reason = ((asset.get("route") or {}).get("reason") or "held by routing")
+                db.set_contact_status(conn, r["contact_id"], "skipped", f"held: {reason}"[:400])
+                held += 1
+                continue
             issues = G.lint_assets(asset)
             conn.execute("UPDATE contacts SET variant=? WHERE contact_id=?",
                          (asset.get("variant", "value-give"), r["contact_id"]))
@@ -131,7 +136,8 @@ def cmd_ingest(args):
                     notes += f" {res['failed']} failed"
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"[notes] writeback skipped: {e}\n")
-    print(f"batch {args.batch_id} ingested: {gen} generated, {bad} failed{notes}")
+    held_s = f", {held} held" if held else ""
+    print(f"batch {args.batch_id} ingested: {gen} generated, {bad} failed{held_s}{notes}")
     return 0
 
 

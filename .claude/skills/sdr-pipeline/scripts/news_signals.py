@@ -260,11 +260,15 @@ TRIGGERS = {
         # granularity — a found verdict dated strictly before the cutoff month
         # is downgraded; the boundary month is kept).
         "recent_window_days": 90,
+        # Value Global 2026-10 feedback: an acquired company that stays a
+        # separate unit has no ERP to retire — scored out, never sent.
+        "hold_separate_unit": True,
         "brief": """\
 # Trigger: M&A Carve-Out — an acquisition or divestiture announced in the LAST 90 DAYS
-Why it matters (context only, never quote it): when a company divests or acquires, the separated
-entity keeps running on the parent's ERP through a 6-12 month Transition Services Agreement window,
-with messy commingled data — any acquisition or divestiture starts an ERP data-separation clock.
+Why it matters (context only, never quote it): an acquirer that folds the target in ends up with a
+second ERP kept alive for old reports (a retirement candidate); a divested entity or carve-out has to
+get its own history out of the parent's ERP before the Transition Services Agreement ends. TSA
+periods run from CLOSING, not from announcement.
 
 Research news STRICTLY within the last 90 days (on or after {cutoff_date}). Sources in priority order:
 1. Company newsroom / press releases.
@@ -275,30 +279,40 @@ Searches to draw from (pick the most promising first):
 "{company}" divestiture / "{company}" "carve-out" / "{company}" spinoff /
 "{company}" "definitive agreement" / "{company}" completes acquisition
 
-details to extract: {{"deal_type": "divestiture|spinoff|acquisition", "entity": "<the entity being separated or acquired>", "close_date": "<announced/expected close date, or ''>"}}
+details to extract: {{"deal_type": "divestiture|spinoff|acquisition", "entity": "<the entity being separated or acquired>", "close_date": "<announced/expected close date, or ''>", "closed": true|false, "prospect_role": "acquirer|acquired|seller|divested_entity|carveout_buyer|''", "integration": "consolidate|separate_unit|''"}}
+- prospect_role is THIS company's side of the deal: "acquires" / "completes acquisition" with the
+  target folded in = acquirer; this company being bought whole = acquired; "divests" / "sells" /
+  "spins off" a unit = seller; this company IS the unit being separated = divested_entity; buying a
+  unit out of a parent with a transition period = carveout_buyer.
+- integration (acquisitions only): consolidate when the target is being folded into the buyer's
+  operations; separate_unit when a source says it will keep running as a separate / standalone /
+  independent unit or brand; '' when no source says.
+- closed: true only when a source confirms the deal has CLOSED; an announced or pending deal is false.
 
 Scoring: divestiture is hottest (75-95), then spinoff (65-85), then acquisition (50-80) — scale
 within the band by deal size / ERP implication and how recent the announcement is.
 DISQUALIFIERS (report found=false): stock buybacks; minor asset purchases with no ERP implication
 (a small product line, IP, a single facility); deals announced more than 90 days ago; rumors with no
-primary source.
+primary source; an acquisition where the target keeps running as a separate unit (no consolidation
+means no system to retire; still record integration="separate_unit" in details).
 """,
     },
     "erp_migration": {
         "label": "ERP migration",
         "brief": """\
-# Trigger: SaaS ERP migration / modernization (Oracle Fusion Cloud, SAP S/4HANA)
-Why it matters (context only): a new SaaS ERP only accepts open items and recent data — 20 years of
-legacy EBS transactional history stays behind under audit, tax, and legal-retention obligations.
+# Trigger: ERP switch / modernization (Oracle Fusion Cloud, SAP S/4HANA, Workday, or another new ERP)
+Why it matters (context only): a new ERP only takes open items and recent data — the old system is
+usually kept running for years just so finance and audit can look up its history.
 
 Highest-signal sources:
-1. Job postings: "{company}" "S/4HANA" / "{company}" "Oracle Fusion" / "{company}" "ERP transformation"
+1. Job postings: "{company}" "S/4HANA" / "{company}" "Oracle Fusion" / "{company}" "Workday Financials" /
+   "{company}" "ERP transformation"
    — reqs like "S/4HANA Migration Lead", "Oracle Cloud ERP Functional", "ERP Program Manager".
 2. SI press releases: "{company}" Deloitte OR Accenture OR Infosys S/4 OR Fusion
 3. Earnings-call transcripts — CFOs announce ERP modernization: "{company}" earnings transcript ERP
 4. Company press / analyst coverage.
 
-details to extract: {{"platform": "<Oracle Fusion Cloud|SAP S/4HANA|other|''>", "stage": "<evaluating|selected|mid-implementation|''>", "si_partner": "<SI partner if named, or ''>"}}
+details to extract: {{"platform": "<the NEW ERP: Oracle Fusion Cloud|SAP S/4HANA|Workday|Microsoft Dynamics 365|Infor|NetSuite|<other name>|''>", "legacy_erp": "<the system being replaced, ONLY when a source names it (e.g. Oracle E-Business Suite, PeopleSoft, JD Edwards, SAP ECC), else ''>", "stage": "<evaluating|selected|mid-implementation|''>", "si_partner": "<SI partner if named, or ''>"}}
 
 Scoring: evaluating = 40-60, selected = 60-75, MID-IMPLEMENTATION = 75-95 (the sweet spot —
 data-migration pain is imminent). Program news may be older than 90 days if the program is clearly
@@ -530,6 +544,8 @@ def _apply_verdict_guards(trigger_id, out, today=None):
       is strictly older than the cutoff month is outside the window -> not
       found (month granularity: the boundary month is conservatively kept).
     - min_found_score (license_audit 55): a weak found -> not found.
+    - hold_separate_unit (ma_carveout): an acquisition whose target keeps
+      running as a separate unit (details.integration) -> not found.
     Downgrades keep the evidence: the original score/headline move losslessly
     into details, and the summary gets only a short bracketed marker."""
     spec = TRIGGERS[trigger_id]
@@ -540,6 +556,11 @@ def _apply_verdict_guards(trigger_id, out, today=None):
         out["summary"] = _truncate(f"{marker} {out.get('summary') or ''}", 800)
         out["found"], out["score"], out["headline"] = False, 0, ""
 
+    if (spec.get("hold_separate_unit") and out.get("found")
+            and str((out.get("details") or {}).get("integration") or "").strip().lower()
+            == "separate_unit"):
+        _downgrade("separate_unit", "[acquired company runs as a separate unit: nothing to retire]")
+        return
     cap = spec.get("max_found_score")
     if cap and out.get("found") and (out.get("score") or 0) > cap:
         out["score"] = cap
@@ -1768,6 +1789,17 @@ def self_test():
           and v["summary"].endswith("tail-evidence"))
          ({"found": True, "score": 40, "headline": "Weak proxy", "date": "",
            "summary": ("x" * 40 + " tail-evidence"), "details": {}})),
+        ("separate-unit acquisition is held (scored out), a consolidating one kept",
+         (lambda sep, con: (_apply_verdict_guards("ma_carveout", sep) or True)
+          and (_apply_verdict_guards("ma_carveout", con) or True)
+          and not sep["found"] and "separate_unit" in sep["details"]
+          and con["found"] and con["score"] == 70)
+         ({"found": True, "score": 70, "headline": "Buys X, runs it standalone",
+           "date": _utcnow().strftime("%Y-%m"), "summary": "s",
+           "details": {"deal_type": "acquisition", "integration": "separate_unit"}},
+          {"found": True, "score": 70, "headline": "Buys Y and folds it in",
+           "date": _utcnow().strftime("%Y-%m"), "summary": "s",
+           "details": {"deal_type": "acquisition", "integration": "consolidate"}})),
         ("recency window downgrades a stale ma_carveout date, keeps a current one",
          (lambda old, new: (_apply_verdict_guards("ma_carveout", old) or True)
           and (_apply_verdict_guards("ma_carveout", new) or True)
