@@ -10,21 +10,7 @@ import { SortTh, useSort } from './sortable.jsx'
 // verdicts with scores + sources), and the contacts reusing this row.
 // onChanged(payload) hands the parent the fresh signals payload after an action
 // so the list updates in place (refresh/detect both return the full payload).
-const NO_TECH = 'No signals detected'
-const NO_HIRING = 'No open roles detected'
-const NO_NEWS = 'No ERP news signals detected'
-
-function pct(x) { return x == null ? '—' : `${Math.round(x * 100)}%` }
-
-function hubspotLine(hs, envVar = 'TECH_HUBSPOT_WRITEBACK') {
-  if (!hs) return 'not attempted'
-  if (hs.ok) return `updated company ${hs.company_id}`
-  if (hs.reason === 'disabled') return `disabled (${envVar}=0)`
-  if (hs.reason === 'not_matched') return 'skipped (company not matched by Prospeo)'
-  if (hs.reason === 'no_company') return 'no matching company in HubSpot'
-  if (hs.reason === 'no_token') return 'no HubSpot token configured'
-  return hs.error ? `error: ${hs.error}` : 'not written'
-}
+import { NO_TECH, NO_HIRING, NO_NEWS, pct, hubspotLine } from './signalReport.js'
 
 export default function SignalDetail({ domain, onClose, onChanged }) {
   const [d, setD] = useState(null)

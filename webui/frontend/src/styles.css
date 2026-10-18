@@ -84,7 +84,7 @@ a:hover { text-decoration: underline; }
 .sidebar .foot { color: rgba(255, 255, 255, 0.38); font-size: 10.5px; padding: 10px; line-height: 1.6; letter-spacing: .2px; }
 
 /* Main */
-.main { flex: 1; padding: 36px 44px; max-width: 1720px; }
+.main { flex: 1; min-width: 0; padding: 36px 44px; max-width: 1720px; }
 .page-title { font-size: 30px; font-weight: 600; letter-spacing: -.6px; line-height: 1.1; margin: 0 0 6px; }
 .page-sub { color: var(--muted); font-size: 14.5px; line-height: 1.5; max-width: 680px; margin: 0 0 28px; }
 
@@ -93,6 +93,10 @@ a:hover { text-decoration: underline; }
 .panel.feature { border-radius: var(--radius-lg); padding: 24px 26px; }
 .grid { display: grid; gap: 18px; }
 .stat-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 18px; }
+/* Wrapping flex row of stat tiles: shares the width evenly, wraps on narrow screens. */
+.stat-row { display: flex; flex-wrap: wrap; gap: 14px; }
+.stat-row > .stat { flex: 1 1 140px; min-width: 0; }
+.stat-row > .stat .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stat { position: relative; overflow: hidden; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 20px; box-shadow: var(--shadow); }
 .stat.accent::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--cta); border-radius: 3px 0 0 3px; }
 .stat .label { color: var(--faint); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .7px; }
