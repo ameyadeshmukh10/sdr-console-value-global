@@ -103,9 +103,15 @@ export function num(v) {
   return v == null ? '—' : v.toLocaleString()
 }
 
-// One-line text clipped with an ellipsis inside a table cell; the full text is
-// the hover title. Browsers ignore max-width on <td> itself, so a long value
-// would stretch the table past its panel — the limit lives on this inner block.
-export function Truncate({ text, max = 320, children }) {
-  return <div className="truncate" style={{ maxWidth: max }} title={text || undefined}>{children ?? text}</div>
+// Text clipped with an ellipsis inside a table cell: one line by default, or
+// wrapped and cut after `lines` lines. The full text is the hover title.
+// Browsers ignore max-width on <td> itself, so a long value would stretch the
+// table past its panel — the limit lives on this inner block.
+export function Truncate({ text, max = 320, lines = 1, children }) {
+  const style = lines > 1 ? { maxWidth: max, WebkitLineClamp: lines } : { maxWidth: max }
+  return (
+    <div className={lines > 1 ? 'clamp' : 'truncate'} style={style} title={text || undefined}>
+      {children ?? text}
+    </div>
+  )
 }

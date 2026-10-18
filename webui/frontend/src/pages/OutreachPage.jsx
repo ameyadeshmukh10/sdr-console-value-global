@@ -261,7 +261,7 @@ export default function OutreachPage() {
                         : <span className="muted">—</span>}
                 </td>
                 <td><FlagChips flags={r.flags} country={r.country} /></td>
-                <td className="muted"><Truncate text={r.signal} max={320} /></td>
+                <td className="muted"><Truncate text={r.signal} max={320} lines={3} /></td>
               </tr>
             ))}
             {data && data.items.length === 0 && !loading && (
