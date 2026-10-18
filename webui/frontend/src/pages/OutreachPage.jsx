@@ -58,6 +58,9 @@ export default function OutreachPage() {
   // be un-approved until they enroll)
   const selectable = (r) => r.gated && r.status === 'generated'
   const pageSelectable = (data?.items || []).filter(selectable)
+  const notSelectableWhy = (r) => (!r.gated
+    ? 'Autonomous (SLA) contact: no approval gate'
+    : `Status ${r.status}: only generated copy can be approved`)
   const pageApprovable = (data?.items || []).filter(approvable)
   const selIds = Object.keys(selected).filter((k) => selected[k])
 
@@ -207,18 +210,19 @@ export default function OutreachPage() {
           <thead>
             <tr>
               <th style={{ width: 34 }}>
-                {pageSelectable.length > 0 && (
-                  <input type="checkbox" style={{ width: 'auto' }}
-                    checked={pageSelectable.every((r) => selected[r.contact_id])}
-                    onChange={(e) => {
-                      const on = e.target.checked
-                      setSelected((m) => {
-                        const next = { ...m }
-                        pageSelectable.forEach((r) => { next[r.contact_id] = on })
-                        return next
-                      })
-                    }} />
-                )}
+                {/* always shown; disabled when nothing on this page is at the outreach gate */}
+                <input type="checkbox" style={{ width: 'auto' }}
+                  disabled={pageSelectable.length === 0}
+                  title={pageSelectable.length === 0 ? 'Nothing on this page can be approved' : 'Select all approvable rows on this page'}
+                  checked={pageSelectable.length > 0 && pageSelectable.every((r) => selected[r.contact_id])}
+                  onChange={(e) => {
+                    const on = e.target.checked
+                    setSelected((m) => {
+                      const next = { ...m }
+                      pageSelectable.forEach((r) => { next[r.contact_id] = on })
+                      return next
+                    })
+                  }} />
               </th>
               <SortTh label="Name" k="name" sort={sort} onSort={toggleSort} />
               <SortTh label="Company" k="company" sort={sort} onSort={toggleSort} />
@@ -235,10 +239,12 @@ export default function OutreachPage() {
             {data?.items?.map((r) => (
               <tr key={r.contact_id} className="clickable" onClick={() => setOpenId(r.contact_id)}>
                 <td onClick={(e) => e.stopPropagation()}>
-                  {selectable(r) && (
-                    <input type="checkbox" style={{ width: 'auto' }} checked={!!selected[r.contact_id]}
-                      onChange={(e) => setSelected((m) => ({ ...m, [r.contact_id]: e.target.checked }))} />
-                  )}
+                  {/* always shown; disabled for rows that are not at the outreach gate */}
+                  <input type="checkbox" style={{ width: 'auto' }}
+                    disabled={!selectable(r)}
+                    title={selectable(r) ? undefined : notSelectableWhy(r)}
+                    checked={selectable(r) && !!selected[r.contact_id]}
+                    onChange={(e) => setSelected((m) => ({ ...m, [r.contact_id]: e.target.checked }))} />
                 </td>
                 <td>{r.first_name} {r.last_name}{r.edited && <span className="badge muted" style={{ marginLeft: 6 }}>edited</span>}</td>
                 <td>{r.company || <span className="muted">—</span>}</td>
