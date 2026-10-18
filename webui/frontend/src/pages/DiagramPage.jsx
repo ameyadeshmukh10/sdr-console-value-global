@@ -1,9 +1,13 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
-import { ErrorBanner, num } from '../components/ui.jsx'
+import { ErrorBanner, Spinner, num } from '../components/ui.jsx'
 import StudioCanvas from '../components/StudioCanvas.jsx'
 import StudioPane, { tabForRow } from '../components/StudioPane.jsx'
 import { useInstructions, customized, PERSONA_ORDER, SEGMENT_ORDER } from '../components/StudioEditors.jsx'
+import {
+  SectionCard, PipelineSection, IcpFilterSection, PersonaAgentsSection,
+  SequencingSection, KnowledgeSection, GuardrailsSection, SignalsSection,
+} from '../components/OrchestrationSections.jsx'
 
 // The Orchestration studio: the pipeline drawn as a node canvas. Click any
 // node (or a branch row inside one) and its inspector slides in from the
@@ -18,6 +22,7 @@ export default function DiagramPage() {
   const [unenroll, setUnenroll] = useState(null)
   const [runBusy, setRunBusy] = useState(false)
   const [runMsg, setRunMsg] = useState(null)
+  const [expanded, setExpanded] = useState(() => new Set())
   const store = useInstructions()
 
   useEffect(() => {
@@ -83,6 +88,28 @@ export default function DiagramPage() {
   }
   const nCustom = Object.keys(dots).filter((k) => !k.includes(':')).length
 
+  function toggleSection(id) {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  // Read-only "under the hood" list below the canvas — the full live config in
+  // one scroll, complementing the per-node inspectors (which are where edits live).
+  const sections = [
+    { id: 'pipeline', title: 'Pipeline stages & agent routing', sub: 'sdr-pipeline SKILL.md · live', C: PipelineSection, data: config?.pipeline },
+    { id: 'icp', title: 'ICP filter — who gets written to', sub: 'buyer_group.py · live', C: IcpFilterSection, data: config?.icp_filter },
+    { id: 'personas', title: 'Persona agents', sub: '.claude/agents · live', C: PersonaAgentsSection, data: config?.personas },
+    { id: 'sequencing', title: 'Sequencing & CTA offers', sub: 'icp-email.md · cta-offers.md · live', C: SequencingSection, data: config?.sequencing },
+    { id: 'knowledge', title: 'Knowledge base', sub: 'offer.md · live', C: KnowledgeSection, data: config?.knowledge },
+    { id: 'guardrails', title: 'Guardrails', sub: 'lint_sequence.py · icp-email.md · live', C: GuardrailsSection, data: config?.guardrails },
+    { id: 'signals', title: 'Signal intelligence', sub: 'technographics + hiring config · live', C: SignalsSection, data: config?.signals },
+  ]
+  const failedSections = Object.keys(config?.errors || {})
+
   const select = (id, rowKey) => setSelected({ id, tab: tabForRow(id, rowKey) })
 
   return (
@@ -103,6 +130,20 @@ export default function DiagramPage() {
       <ErrorBanner error={error || store.error} />
 
       <StudioCanvas selected={selected?.id} onSelect={select} customDots={dots} />
+
+      {/* ---- under the hood: live config sections -------------------------- */}
+      <div className="section-h" style={{ marginTop: 18 }}>Under the hood</div>
+      {!config && !error && <Spinner label="Loading pipeline config…" />}
+      {failedSections.length > 0 && (
+        <p className="muted" style={{ fontSize: 12 }}>
+          Some sections could not be parsed from the repo sources: {failedSections.join(', ')}.
+        </p>
+      )}
+      {config && sections.map(({ id, title, sub, C, data }) => (
+        <SectionCard key={id} id={id} title={title} sub={sub} open={expanded.has(id)} onToggle={toggleSection}>
+          <C data={data} />
+        </SectionCard>
+      ))}
 
       {selected && (
         <StudioPane nodeId={selected.id} initialTab={selected.tab}
