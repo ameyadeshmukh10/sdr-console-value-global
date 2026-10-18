@@ -1768,6 +1768,7 @@ def generate_one(contact, knowledge, client, write=True, variant=DEFAULT_VARIANT
 
 def research_signal(domain, company, client=None):
     """Force a fresh signal search for one company and update the cache (UI refresh)."""
+    _ensure_schema()
     client = client or AnthropicClient()
     system = ("You research a B2B company's single most recent GTM signal.\n\n"
               + RESEARCH_ONLY_TASK.format(**_today()))
@@ -1855,11 +1856,40 @@ def build_request_params(contact, knowledge, client, cached_signal=None, variant
     )
 
 
+_SCHEMA_LOCK = threading.Lock()
+_SCHEMA_READY = False
+
+
+def _ensure_schema():
+    """Apply batch_db's additive migrations (e.g. account_signals.signal_kind)
+    once per process, before any signal write — a standalone
+    `generate_batch.py <batch_id>` on an older database must not fail its
+    upsert_signal after the copy is written (PR #32 review). Same guard as
+    news_signals._db()."""
+    global _SCHEMA_READY
+    if _SCHEMA_READY:
+        return
+    with _SCHEMA_LOCK:
+        if not _SCHEMA_READY:
+            db.retry_locked(_init_schema_once)
+            _SCHEMA_READY = True
+
+
+def _init_schema_once():
+    """One retry_locked attempt: its own connection, per that helper's contract."""
+    conn = db.connect()
+    try:
+        db.init_schema(conn)
+    finally:
+        conn.close()
+
+
 def prepare_batch_requests(contacts, knowledge, client=None, variant=DEFAULT_VARIANT):
     """Build {custom_id, params} for each contact + a manifest for result handling.
     Already-cached companies become cheap write-only requests (no web search);
     segment-approved trigger contacts become verdict-anchored write-only
     requests through the ERP system prompt."""
+    _ensure_schema()
     client = client or AnthropicClient()
     requests, manifest = [], {}
     for c in contacts:
@@ -1970,6 +2000,7 @@ def generate_batch(batch_id, progress_cb=None, cancel_event=None, max_workers=MA
     progress_cb(contact_id, state, **extra) is called as each contact moves:
       state in {"researching","linted","failed","cancelled","error"}.
     """
+    _ensure_schema()  # before the worker threads write account_signals
     conn = db.connect()
     contacts = db.get_batch(conn, batch_id)
     conn.close()
