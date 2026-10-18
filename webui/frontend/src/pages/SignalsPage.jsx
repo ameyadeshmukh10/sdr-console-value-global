@@ -229,8 +229,17 @@ export default function SignalsPage() {
   const selRunning = !!selJob?.running
   const allChecked = sorted.length > 0 && sorted.every((s) => selected.has(s.domain))
   const someChecked = !allChecked && sorted.some((s) => selected.has(s.domain))
+  // The header checkbox acts on the VISIBLE rows only: companies checked but
+  // hidden by the search stay checked (Uncheck clears the whole selection).
   function toggleAll() {
-    setSelected(allChecked ? new Set() : new Set(sorted.map((s) => s.domain)))
+    setSelected((prev) => {
+      const next = new Set(prev)
+      for (const s of sorted) {
+        if (allChecked) next.delete(s.domain)
+        else next.add(s.domain)
+      }
+      return next
+    })
   }
 
   return (
