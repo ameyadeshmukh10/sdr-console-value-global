@@ -52,6 +52,9 @@ COPY --from=frontend /app/webui/frontend/dist ./webui/frontend/dist
 # Stash the committed data as a one-time seed; /app/data is the live dir (a Railway Volume in
 # prod). The entrypoint copies the seed into /app/data only when the Volume is empty.
 RUN mv data seed-data && mkdir -p data && chmod +x docker-entrypoint.sh
+# Non-secret config defaults -> /app/.env (.env itself is dockerignored). Loaders are
+# setdefault-style, so Railway service variables always override these.
+RUN cp .env.defaults .env
 # Documentation only — Railway injects $PORT and app.py binds 0.0.0.0:$PORT.
 EXPOSE 8080
 ENTRYPOINT ["./docker-entrypoint.sh"]

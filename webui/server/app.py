@@ -179,9 +179,9 @@ def derive_cta(asset):
 # ----------------------------------------------------------------------------
 def read_env():
     """Config the web UI reads (campaign IDs, HeyReach config, …). Merges the .env file
-    (local dev) with the process environment (Railway/Docker, where there is NO .env file —
-    config is injected as real env vars). The process environment wins, so host-provided
-    config is always honored even when ENV_PATH is absent."""
+    (local dev; in the Docker image it is the baked-in .env.defaults) with the process
+    environment (Railway service variables). The process environment wins, so
+    host-provided config is always honored, and ENV_PATH may be absent."""
     import os
     env = {}
     if ENV_PATH.is_file():

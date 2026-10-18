@@ -69,7 +69,9 @@ HeyReach (LinkedIn, deferred).
   click-by-click instructions or ask for a project token. Code changes ship via GitHub →
   merge to `main` → Railway auto-deploys.
 - Env vars live in Railway service variables in prod, `.env` locally. `.env.example`
-  documents all of them.
+  documents all of them. **`.env.defaults`** (committed, non-secret only) is copied to
+  `/app/.env` in the image: every loader is setdefault-style, so a Railway variable
+  always overrides it — put image-wide defaults there instead of in Railway.
 
 ## Data stores
 
@@ -252,8 +254,8 @@ triggers, via the Anthropic Messages API + server-side `web_search` (the same ch
   `NEWS_MODEL_<TRIGGER_ID>` env → `TRIGGERS[..]["model"]` → `NEWS_MODEL` →
   `CLAUDE_MODEL` → the client default (`claude-opus-5-5` since 2026-10). **The first
   full run burned Opus 4.8 rates ($5/$25 per MTok) on all 1,262 accounts because nothing
-  was set** — `NEWS_MODEL` is now a Railway service variable (2026-09-10;
-  `claude-sonnet-5` → `claude-sonnet-5-5`, same $2/$10, 2026-10).
+  was set** — `NEWS_MODEL=claude-sonnet-5-5` ($2/$10) is baked into the image via
+  `.env.defaults` (2026-10; a Railway service variable of the same name still wins).
   Test cheaper tiers per trigger without code changes, e.g.
   `NEWS_MODEL_LICENSE_AUDIT=claude-haiku-4-5`; `NEWS_COMPOSITE_MODEL` scopes the
   composite-signal call. `_client()` keeps one cached client per model.
