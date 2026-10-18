@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts'
@@ -6,6 +6,7 @@ import { api } from '../api.js'
 import { Stat, Spinner, ErrorBanner, num, pct } from '../components/ui.jsx'
 import { SortTh, useSort } from '../components/sortable.jsx'
 import { BRAND, SERIES, TOOLTIP_STYLE } from '../theme.js'
+import { isStale } from '../autoRefresh.js'
 
 // Pillar 5 — Trends: what's working across the interested replies. Reads the
 // cached interested-trends analysis; refresh re-runs the fetch + analyze chain.
@@ -39,18 +40,31 @@ export default function TrendsPage() {
   const [variants, setVariants] = useState(null)
   const [error, setError] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
+  // Auto-refresh fires at most once per page open (same rule as Analytics).
+  const autoChecked = useRef(false)
 
   function load() {
-    api.trends().then((d) => { setData(d); setError(null) }).catch((e) => setError(e.message))
     api.variants().then(setVariants).catch(() => {})
+    return api.trends().then((d) => { setData(d); setError(null); return d })
+      .catch((e) => { setError(e.message); return null })
   }
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load().then((d) => {
+      if (autoChecked.current) return
+      autoChecked.current = true
+      // fetched_at stamps the reply FETCH, not the analysis: a fresh fetch with
+      // no analysis built yet (available: false) must still initialize it
+      if (d && (!d.available || isStale(d.fetched_at))) refresh()
+    })
+  }, [])
 
   async function refresh() {
     setRefreshing(true); setError(null)
     try {
       const d = await api.refreshTrends()
       setData(d)
+      // interested counts in the variant / track tables come from the refreshed replies
+      api.variants().then(setVariants).catch(() => {})
       if (!d.ok) setError('Refresh chain returned errors — showing latest available analysis.')
     } catch (e) { setError(e.message) }
     finally { setRefreshing(false) }
