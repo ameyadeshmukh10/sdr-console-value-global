@@ -483,6 +483,120 @@ _SIDE_GUIDE = {
 }
 
 
+# Value Global's sample sequences ("Signal Messaging Feedback" section 5,
+# 2026-10-09), verbatim. They show TONE and STRUCTURE, not fixed text: the
+# prompt says so, and _lint_retire rejects copy that lifts a long run of words
+# from them (feedback issue 12: identical lines across accounts read as a
+# template). Divestiture and ERP-switch touches 3-4 follow the acquirer pattern.
+_RETIRE_T34 = """\
+Touch 3. Subject: 20 minutes on the {Acquired} ERP
+{First}, would 20 minutes help? I would cover three things for {Company}: which inherited systems
+can be switched off, which reports need to survive, and what the old ERP costs to run until then.
+{Slot 1} or {Slot 2} work on my end, and I am happy to fit your calendar.
+
+Touch 4. Subject: Closing the loop
+{First}, I will stop here. If the question of what to do with {Acquired}'s old ERP comes up later
+this year, reply any time and we can pick it up. Happy to stay connected either way."""
+
+RETIRE_EXAMPLES = {
+    "acquirer": """\
+Touch 1. Subject: {Acquired} systems after the close
+{First}, I saw {Company} {closed / agreed to acquire} {Acquired} on {date}. Once the integration
+settles, most acquirers find the acquired company's ERP still running, kept on mainly so finance
+and audit can pull old reports. Has anyone decided what happens to that system once its users and
+transactions have moved across?
+
+Touch 2. Subject: Retiring the old ERP without losing the reports
+{First}, a follow-up on {Acquired}. The usual options are to keep paying license, support and
+hosting on the old ERP for years, or to push history into a new system that was not built to hold
+it. A third option is to retire the old system and move its history into a searchable archive that
+carries the reports finance and audit still use. InfoCorvus, whose ROAD platform we deliver, puts
+the saving at $1M to $6M a year per retired legacy system. Would 20 minutes be worth it to see
+whether that applies to {Acquired}?
+
+""" + _RETIRE_T34,
+    "data_split": """\
+Touch 1. Subject: Getting {Entity}'s history out of {Parent}
+{First}, with {Entity} separating from {Parent}, its finance and operations history sits inside
+{Parent}'s ERP. How are you planning to get that history out, with transactions still linked to
+each other, before the transition period ends?
+
+Touch 2. Subject: A clean split, then switch it off
+{First}, the common route is a scripted extract. The links between invoices, payments and the
+ledger break, and someone rebuilds them later under deadline. ROAD, the InfoCorvus platform we
+deliver, pulls only {Entity}'s records as complete business objects, so an invoice still carries
+its lines, payments and accounting entries. {Entity} stands up on its own data, and the leftover
+copy can be retired rather than kept running. Worth 20 minutes to map this against your timeline?
+
+(Touches 3 and 4 follow the acquirer pattern, adapted to the split:)
+""" + _RETIRE_T34,
+    "erp_switch": """\
+Touch 1. Subject: The Oracle system after {Target} goes live
+{First}, I saw {Company} is moving to {Target}. After go-live, the old Oracle environment usually
+stays on for years. Nobody transacts in it, but finance and audit still need its history. Is there
+a plan yet for that system after cutover?
+
+Touch 2. Subject: Paying Oracle for lookups
+{First}, keeping it running means paying Oracle license and support on a system used only for
+lookups. Retiring it moves that history into a searchable archive with the reports your teams
+still use, and the license on that environment goes away. One Oracle EBS environment of 2 TB was
+retired in a month. The better time to plan it is before cutover, so only active data has to
+migrate. Would 20 minutes be useful?
+
+(Touches 3 and 4 follow the acquirer pattern, adapted to the old system:)
+""" + _RETIRE_T34,
+}
+_EXAMPLE_KEY = {"acquirer": "acquirer", "acquired": "acquirer", "seller": "data_split",
+                "divested_entity": "data_split", "carveout_buyer": "data_split",
+                "erp_switch": "erp_switch"}
+
+
+def retire_example_block(route):
+    """The client's sample sequence for this route, framed as tone/structure
+    only, with the route-specific deltas (Fusion: no licensing sentence;
+    old system not confirmed Oracle: don't say Oracle)."""
+    key = _EXAMPLE_KEY.get(route.get("side") or "", "acquirer")
+    notes = []
+    if route.get("side") == "acquired":
+        notes.append("This prospect is the company BEING acquired: keep the shape, but write "
+                     "from their side (their own ERP after they move onto the buyer's systems).")
+    if key == "erp_switch" and not route.get("licensing"):
+        notes.append("Fusion / unknown target: use the same structure but DROP the licensing "
+                     "sentence; lead on the cost of keeping the old system alive for lookups, "
+                     "and on retiring it before cutover so less data migrates.")
+    if key == "erp_switch" and not any(k in (route.get("legacy") or "").lower()
+                                       for k in _ORACLE_LEGACY):
+        notes.append("The old system is NOT confirmed as Oracle: never write 'Oracle' for it "
+                     "(say 'the old system' / 'the old ERP').")
+    return ("# Client sample sequence (TONE and STRUCTURE only)\n"
+            "Value Global wrote this to show shape, length, and voice. It is NOT fixed text: "
+            "write fresh sentences from this account's research, never copy its lines (buyers "
+            "who compare notes spot a template). {Placeholders} stand for research facts.\n"
+            + "".join(f"- {n}\n" for n in notes) + "\n"
+            + RETIRE_EXAMPLES[key] + "\n")
+
+
+_EXAMPLE_WORDS = None
+
+
+def _example_overlap(body, n=12):
+    """The first run of >= n consecutive words a body shares with any client
+    sample (placeholders never match), or ''."""
+    global _EXAMPLE_WORDS
+    if _EXAMPLE_WORDS is None:
+        grams = set()
+        for text in RETIRE_EXAMPLES.values():
+            w = re.findall(r"[a-z0-9$']+", re.sub(r"\{[^}]*\}", " | ", text).lower())
+            grams.update(" ".join(w[i:i + n]) for i in range(len(w) - n + 1))
+        _EXAMPLE_WORDS = grams
+    w = re.findall(r"[a-z0-9$']+", body.lower())
+    for i in range(len(w) - n + 1):
+        g = " ".join(w[i:i + n])
+        if g in _EXAMPLE_WORDS:
+            return g
+    return ""
+
+
 def route_block(route):
     """The routing instructions for the retirement / data-split prompt."""
     side = route.get("side") or ""
@@ -667,7 +781,7 @@ def build_erp_user(contact, segment, verdict, tech_line=None, prior_issues=None,
     )
     route = route or erp_route(segment, verdict, tech_line)
     if route["track"] in RETIRE_TRACKS:
-        base += "\n" + route_block(route)
+        base += "\n" + route_block(route) + "\n" + retire_example_block(route)
     else:
         mention = erp_mention_block(tech_line)
         if mention:
@@ -790,6 +904,11 @@ def _lint_retire(email, route):
                           "reports are cleared)")
         if not route.get("licensing") and _LICENSE.search(b):
             issues.append(f"step{n}: mentions licensing ({route.get('reason') or 'not allowed'})")
+    for s in steps[:3]:  # touch 4's breakup shape is deliberately shared
+        lifted = _example_overlap(s["body"])
+        if lifted:
+            issues.append(f"step{s['n']}: copies the client sample verbatim ('{lifted}...'); "
+                          "write fresh wording from this account's research")
     b1 = steps[0]["body"]
     if not b1.rstrip().endswith("?"):
         issues.append("step1: must end on a question about their plan for the old system")

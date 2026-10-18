@@ -383,6 +383,13 @@ application-**retirement** pitch, never the staying-on-EBS archiving pain.
   reconciling; remove a pattern there (and restore it in offer.md) once the client
   confirms it. `lint_assets` passes
   `asset["route"]`; assets without a route lint exactly as before.
+- **Client samples (feedback section 5):** `RETIRE_EXAMPLES` holds Value Global's sample
+  sequences verbatim (acquirer / data_split / erp_switch; splits and switches reuse the
+  acquirer touches 3-4). `retire_example_block(route)` injects the matching one into the
+  USER prompt as "tone and structure only", with route deltas (acquired side, Fusion =
+  drop the licensing sentence, old system not confirmed Oracle = never say Oracle).
+  `_lint_retire` rejects touches 1-3 sharing a 12-word run with any sample
+  (`_example_overlap`; touch 4's breakup shape is deliberately shared).
 - **Gotcha:** operator play overrides (`erp_plays.json` on the volume) for `ma_carveout` /
   `erp_migration` still win per field — reset them in the Orchestration view if they hold
   the old archiving framing.
