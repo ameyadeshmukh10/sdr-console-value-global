@@ -1475,13 +1475,11 @@ def refloor_stored(limit=None, dry_run=False):
 
 
 # The research-only refresh (generate_batch.research_signal) and the default
-# generation path write these anchors when they found no news — they carry no
-# trigger content, so a composite from stored found verdicts always beats them.
-GENERIC_SIGNAL_PREFIXES = ("company anchor -", "no recent signal")
-
-
-def is_generic_signal(signal):
-    return (signal or "").strip().lower().startswith(GENERIC_SIGNAL_PREFIXES)
+# generation path store a company PROFILE when they found no news
+# (account_signals.signal_kind='profile') — it carries no trigger content, so a
+# composite from stored found verdicts always beats it.
+def is_generic_signal(signal, kind=None):
+    return db.is_generic_signal(signal, kind)
 
 
 def _found_triggers(news_detail):
@@ -1513,7 +1511,7 @@ def recompose_domain(domain):
     """UI Refresh for an account whose stored news scan FOUND >=1 trigger:
     rebuild the composite from the stored verdicts + current tech/hiring lines
     (one no-search call) and store it OVERWRITING the current signal — the
-    research-only refresh would replace it with a generic company anchor.
+    research-only refresh would replace it with a generic company profile.
     The overwrite is compare-and-swap against the pre-compose snapshot: if
     the signal changed during the call, the newer research wins (stored=False).
     Returns a result dict; None when the account has no found triggers (the
@@ -1558,8 +1556,9 @@ def recompose_stored(limit=None, force=False, replace_generic=False, dry_run=Fal
     after those rows were researched, and the cache-hit skip means they'd
     otherwise wait out NEWS_REFRESH_DAYS. One no-search API call per row
     (real spend — use --limit). Fill-only semantics, same as a live scan —
-    except `replace_generic`, which also overwrites a FRESH generic anchor
-    ("company anchor - …" / "no recent signal …", see is_generic_signal) on a
+    except `replace_generic`, which also overwrites a FRESH company profile
+    (signal_kind='profile', or a legacy "company anchor - …" row; see
+    is_generic_signal) on a
     found-trigger row — compare-and-swap against this run's snapshot, so an
     anchor replaced by real research mid-run is left alone. `dry_run` lists
     the rows it would compose, no API calls."""
@@ -1569,7 +1568,7 @@ def recompose_stored(limit=None, force=False, replace_generic=False, dry_run=Fal
     conn = _db()
     try:
         rows = [dict(r) for r in conn.execute(
-            "SELECT domain, company_name, signal, researched_at, tech_signals, "
+            "SELECT domain, company_name, signal, signal_kind, researched_at, tech_signals, "
             "hiring_signals, news_detail FROM account_signals "
             "WHERE news_detail IS NOT NULL ORDER BY updated_at DESC")]
     finally:
@@ -1582,7 +1581,7 @@ def recompose_stored(limit=None, force=False, replace_generic=False, dry_run=Fal
         if not triggers:
             continue
         summary["eligible"] += 1
-        generic = replace_generic and is_generic_signal(r.get("signal"))
+        generic = replace_generic and is_generic_signal(r.get("signal"), r.get("signal_kind"))
         if not force and not generic and (r.get("signal") or "").strip() and db.signal_fresh(r):
             summary["skipped_fresh"] += 1
             continue
@@ -1873,8 +1872,8 @@ def main():
     ap.add_argument("--dry-run", action="store_true", dest="dry_run",
                     help="with --refloor / --recompose: report what would change, write nothing")
     ap.add_argument("--replace-generic", action="store_true", dest="replace_generic",
-                    help="with --recompose: also overwrite a fresh generic 'company anchor' / "
-                         "'no recent signal' signal on found-trigger rows")
+                    help="with --recompose: also overwrite a fresh company-profile signal "
+                         "(signal_kind='profile') on found-trigger rows")
     args = ap.parse_args()
 
     if args.self_test:

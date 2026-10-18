@@ -84,9 +84,13 @@ open on one. The anchor for every touch is:
 2. The detected ERP platform, when the contact block provides one.
 3. The general pattern about long-running ERP systems (the 10/20/70 story in the knowledge).
 
-# The `signal` field must be auditable
-Set `signal` to the anchor you used, e.g. "role anchor - Director of Enterprise Applications
-on detected Oracle EBS" or "role anchor - IT leadership, no platform detected".
+# The `signal` field: a plain company profile
+Set `signal` to ONE plain sentence that starts with the company's verified name and says what
+the company does, plus its detected ERP platform when the contact block provides one, e.g.
+"AlixPartners is a global consulting firm focused on turnarounds and restructuring." or
+"Acme Foods is a US food manufacturer running Oracle E-Business Suite." It describes the
+ACCOUNT (it is cached and reused for every contact there), so never mention the contact's
+role. No labels or prefixes ("company anchor", "role anchor", "no recent signal").
 """
 
 # ---- Variant write rules (Step 3). Value Global's own guidance: A/B the CTA itself -------------
@@ -158,7 +162,7 @@ Return ONLY a single JSON object, no prose, no markdown code fences, matching EX
 
 {
   "company": "<the company name you verified for the email domain (echo the given company if you did not research)>",
-  "signal": "<the recent signal with its month/date, or 'no recent signal - <anchor>'>",
+  "signal": "<one plain sentence starting with the company's verified name: what it does (plus its ERP platform when provided); no labels or prefixes>",
   "email": {
     "subject1": "...", "body1": "...",
     "subject2": "...", "body2": "...",
@@ -1226,14 +1230,14 @@ def generate_contact_erp(contact, segment, verdict, client, write=True, tech_lin
             "cache_read": cache_read, "cache_write": cache_write}
 
 
-# Write-only preamble: any cached company anchor is provided, so no web search.
+# Write-only preamble: any cached company profile is provided, so no web search.
 WRITE_PREAMBLE = """\
 # Your task
 Do NOT search the web. Write the sequence from the contact block below: the role anchor, the
-detected ERP platform when provided, and any provided company anchor line. Never invent news.
+detected ERP platform when provided, and any provided company profile line. Never invent news.
 """
 
-# Research-only task (UI force-refresh): verify the company + produce a one-line anchor.
+# Research-only task (UI force-refresh): verify the company + produce a one-line profile.
 # No news hunting — the anchor motion for this offer is role + platform + pattern.
 RESEARCH_ONLY_TASK = """\
 Today is {today}.
@@ -1244,13 +1248,15 @@ research the domain's company instead and use ITS current name. (Personal/free e
 are the exception — keep the given name.) Use at most 2 web searches, only to verify the
 company and what it does.
 
-Do NOT hunt for funding rounds, hires, or announcements. Set `signal` to a one-line anchor
-describing the company (what it runs on / sells / operates) usable as background for an
-ERP-archiving conversation, prefixed with "company anchor - ". Set has_recent_signal=false.
+Do NOT hunt for funding rounds, hires, or announcements. Set `signal` to ONE plain sentence
+that starts with the verified company name and says what the company does (what it runs on /
+sells / operates), usable as background for an ERP-archiving conversation, e.g. "AlixPartners
+is a global consulting firm focused on turnarounds, restructuring, and investigations." No
+labels or prefixes. Set has_recent_signal=false.
 
 Return ONLY this JSON, no prose:
 {{"company": "<the company name you verified for the domain>",
-  "signal": "company anchor - <one line>", "has_recent_signal": false}}
+  "signal": "<Company> is ...", "has_recent_signal": false}}
 """
 
 
@@ -1337,7 +1343,7 @@ def build_user(contact, cached_signal=None, prior_issues=None, tech_signals=None
             "the role anchor. Never mention the data source.\n\n"
         )
     if cached_signal:
-        base += (f"Company anchor (verified context; do NOT search the web): {cached_signal}\n\n"
+        base += (f"Company profile (verified context; do NOT search the web): {cached_signal}\n\n"
                  f"Use the contact's first name in the copy. Write the sequence. Return only the JSON object.")
     else:
         base += (f"Use the contact's first name in the copy. Verify the domain's company if needed "
@@ -1745,13 +1751,13 @@ def generate_one(contact, knowledge, client, write=True, variant=DEFAULT_VARIANT
         r["used_cache"] = False
         sig = (r.get("signal") or "").strip()
         if domain and sig:
-            has_recent = not sig.lower().startswith("no recent signal")
             conn = db.connect()
             try:
                 # prefer the model's domain-verified company name over the (possibly
-                # stale) CRM value so the cache row can't say "VictorOps" for splunk.com
+                # stale) CRM value so the cache row can't say "VictorOps" for splunk.com.
+                # The default path never hunts news: what it caches is a profile.
                 db.upsert_signal(conn, domain, r.get("company") or contact.get("company", ""),
-                                 sig, has_recent, client.model)
+                                 sig, False, client.model, kind="profile")
             finally:
                 conn.close()
         return r
@@ -1762,6 +1768,7 @@ def generate_one(contact, knowledge, client, write=True, variant=DEFAULT_VARIANT
 
 def research_signal(domain, company, client=None):
     """Force a fresh signal search for one company and update the cache (UI refresh)."""
+    _ensure_schema()
     client = client or AnthropicClient()
     system = ("You research a B2B company's single most recent GTM signal.\n\n"
               + RESEARCH_ONLY_TASK.format(**_today()))
@@ -1769,7 +1776,7 @@ def research_signal(domain, company, client=None):
     res = client.complete(system, user, use_web_search=True, max_web_searches=3, max_tokens=2048)
     data = extract_json(res["text"])
     signal = (data.get("signal") or "").strip()
-    has_recent = bool(data.get("has_recent_signal")) and not signal.lower().startswith("no recent signal")
+    has_recent = bool(data.get("has_recent_signal"))  # the task forbids news: normally False
     # the model reconciles the CRM name against the domain; its verified name wins
     company_out = (data.get("company") or "").strip() or (company or "")
     conn = db.connect()
@@ -1849,11 +1856,40 @@ def build_request_params(contact, knowledge, client, cached_signal=None, variant
     )
 
 
+_SCHEMA_LOCK = threading.Lock()
+_SCHEMA_READY = False
+
+
+def _ensure_schema():
+    """Apply batch_db's additive migrations (e.g. account_signals.signal_kind)
+    once per process, before any signal write — a standalone
+    `generate_batch.py <batch_id>` on an older database must not fail its
+    upsert_signal after the copy is written (PR #32 review). Same guard as
+    news_signals._db()."""
+    global _SCHEMA_READY
+    if _SCHEMA_READY:
+        return
+    with _SCHEMA_LOCK:
+        if not _SCHEMA_READY:
+            db.retry_locked(_init_schema_once)
+            _SCHEMA_READY = True
+
+
+def _init_schema_once():
+    """One retry_locked attempt: its own connection, per that helper's contract."""
+    conn = db.connect()
+    try:
+        db.init_schema(conn)
+    finally:
+        conn.close()
+
+
 def prepare_batch_requests(contacts, knowledge, client=None, variant=DEFAULT_VARIANT):
     """Build {custom_id, params} for each contact + a manifest for result handling.
     Already-cached companies become cheap write-only requests (no web search);
     segment-approved trigger contacts become verdict-anchored write-only
     requests through the ERP system prompt."""
+    _ensure_schema()
     client = client or AnthropicClient()
     requests, manifest = [], {}
     for c in contacts:
@@ -1938,7 +1974,7 @@ def process_batch_result(custom_id, result, manifest):
                      route=entry["route"])
     # cache the researched signal (combined requests) even if the copy fails lint
     if entry["was_combined"] and domain and asset["signal"]:
-        has_recent = not asset["signal"].lower().startswith("no recent signal")
+        has_recent = False  # the default path never hunts news: a company profile
         conn = db.connect()
         try:
             db.upsert_signal(conn, domain,
@@ -1964,6 +2000,7 @@ def generate_batch(batch_id, progress_cb=None, cancel_event=None, max_workers=MA
     progress_cb(contact_id, state, **extra) is called as each contact moves:
       state in {"researching","linted","failed","cancelled","error"}.
     """
+    _ensure_schema()  # before the worker threads write account_signals
     conn = db.connect()
     contacts = db.get_batch(conn, batch_id)
     conn.close()

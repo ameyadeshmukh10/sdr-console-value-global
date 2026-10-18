@@ -8,6 +8,7 @@ Statuses: contacts = pending|generated|enrolled|failed ; batches = pending|in_pr
 """
 
 import json
+import re
 import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
@@ -241,10 +242,32 @@ def init_schema(conn):
     sig_cols = [r["name"] for r in conn.execute("PRAGMA table_info(account_signals)")]
     for col in ("tech_signals", "tech_detail", "tech_checked_at", "tech_error",
                 "hiring_signals", "hiring_detail", "hiring_checked_at", "hiring_error",
-                "news_signals", "news_detail", "news_checked_at", "news_error"):
+                "news_signals", "news_detail", "news_checked_at", "news_error",
+                "signal_kind"):
         if col not in sig_cols:
             conn.execute(f"ALTER TABLE account_signals ADD COLUMN {col} TEXT")
     conn.commit()
+
+
+# What the `signal` column holds (account_signals.signal_kind):
+#   news      — a dated recent event found by research
+#   profile   — a plain description of the company, no event ("AlixPartners is a
+#               global consulting firm ..."); a trigger composite always replaces it
+#   composite — synthesized from the stored ERP-trigger verdicts (news_signals)
+SIGNAL_KINDS = ("news", "profile", "composite")
+# Rows written before signal_kind existed (kind NULL) marked a profile with a
+# text prefix; they are left as stored and judged by it at read time.
+_LEGACY_MARKER = re.compile(r"^\s*(company anchor|role anchor|no recent signal)\s*[-:]?\s*",
+                            re.I)
+
+
+def is_generic_signal(signal, kind=None):
+    """True when the signal is a company profile, not an event — a trigger
+    composite may always replace it. Legacy rows (kind NULL) are judged by
+    their old text marker."""
+    if kind:
+        return kind == "profile"
+    return bool(_LEGACY_MARKER.match(signal or ""))
 
 
 def upsert_contacts(conn, rows, gated=False):
@@ -478,14 +501,19 @@ def signal_fresh(row, days=90):
     return age is not None and age < days
 
 
-def upsert_signal(conn, domain, company_name, signal, has_recent, model=None):
+def upsert_signal(conn, domain, company_name, signal, has_recent, model=None, kind=None):
+    """Store researched signal text. `kind` defaults from has_recent: a dated
+    event is 'news', anything else a company 'profile'."""
+    kind = kind if kind in SIGNAL_KINDS else ("news" if has_recent else "profile")
     conn.execute("""
-        INSERT INTO account_signals (domain, company_name, signal, has_recent, researched_at, model, updated_at)
-        VALUES (?,?,?,?,?,?,?)
+        INSERT INTO account_signals (domain, company_name, signal, has_recent, researched_at, model,
+                                     updated_at, signal_kind)
+        VALUES (?,?,?,?,?,?,?,?)
         ON CONFLICT(domain) DO UPDATE SET
           company_name=excluded.company_name, signal=excluded.signal, has_recent=excluded.has_recent,
-          researched_at=excluded.researched_at, model=excluded.model, updated_at=excluded.updated_at
-    """, (domain, company_name, signal, 1 if has_recent else 0, now(), model, now()))
+          researched_at=excluded.researched_at, model=excluded.model, updated_at=excluded.updated_at,
+          signal_kind=excluded.signal_kind
+    """, (domain, company_name, signal, 1 if has_recent else 0, now(), model, now(), kind))
     conn.commit()
 
 
@@ -503,7 +531,8 @@ def upsert_composite_signal(conn, domain, signal, model=None, has_recent=True,
 
     `expect_signal` (the caller's snapshot of the signal column, taken BEFORE
     the compose API call) replaces the freshness check with compare-and-swap:
-    write only if the row STILL holds exactly that value. Used by the UI
+    write only if the row STILL holds exactly that value. Without it, a fresh
+    company 'profile' (is_generic_signal) never blocks the composite. Used by the UI
     Refresh and --recompose --replace-generic, so research saved while the
     composite was being written is never overwritten. The check and the write
     share one BEGIN IMMEDIATE transaction. Returns True when the write happened."""
@@ -514,17 +543,20 @@ def upsert_composite_signal(conn, domain, signal, model=None, has_recent=True,
         if expect_signal is not _UNSET:
             ok = (current or None) == (expect_signal or None)  # '' and NULL are one "empty"
         else:
-            ok = not (row and (current or "").strip() and signal_fresh(row))
+            # fill-only: a fresh EVENT wins; a company profile never blocks a composite
+            ok = not (row and (current or "").strip() and signal_fresh(row)
+                      and not is_generic_signal(current, row.get("signal_kind")))
         if not ok:
             conn.rollback()
             return False
         conn.execute("""
-            INSERT INTO account_signals (domain, signal, has_recent, researched_at, model, updated_at)
-            VALUES (?,?,?,?,?,?)
+            INSERT INTO account_signals (domain, signal, has_recent, researched_at, model, updated_at,
+                                         signal_kind)
+            VALUES (?,?,?,?,?,?,'composite')
             ON CONFLICT(domain) DO UPDATE SET
               signal=excluded.signal, has_recent=excluded.has_recent,
               researched_at=excluded.researched_at, model=excluded.model,
-              updated_at=excluded.updated_at
+              updated_at=excluded.updated_at, signal_kind='composite'
         """, (domain, signal, 1 if has_recent else 0, now(), model, now()))
         conn.commit()
         return True
