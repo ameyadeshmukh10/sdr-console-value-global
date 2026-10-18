@@ -31,6 +31,10 @@ DEFAULT_MODEL = "claude-opus-5-5"
 # are short copy / JSON tasks, so default low. Thinking tokens bill as output and
 # count toward max_tokens.
 DEFAULT_EFFORT = "low"
+# Models that reject output_config.effort (400): Claude 3.x, Haiku 4.5, Sonnet 4.5
+# and the pre-4.5 Claude 4 Opus/Sonnet. Denylist, so newer models get effort.
+_NO_EFFORT_MODEL_RE = re.compile(
+    r"^claude-(3|haiku-4|sonnet-4-5|sonnet-4-\d{8}|opus-4-\d{8}|opus-4-1)")
 # Server-side web search tool (model runs the search internally; no client loop).
 WEB_SEARCH_TOOL_TYPE = "web_search_20250305"
 
@@ -73,10 +77,12 @@ class AnthropicClient:
             )
         self.model = model or os.environ.get("CLAUDE_MODEL") or DEFAULT_MODEL
         # Effort scopes to the generation model only: callers that pin their own
-        # model (NEWS_MODEL, per-trigger overrides) keep that model's default —
-        # some older models (Haiku 4.5) reject the field outright.
+        # model (NEWS_MODEL, per-trigger overrides) keep that model's default. It is
+        # also never sent to a model that rejects it (e.g. CLAUDE_MODEL=claude-haiku-4-5).
         effort = (os.environ.get("CLAUDE_EFFORT") or DEFAULT_EFFORT).strip().lower()
-        self.effort = None if model or effort in ("none", "off") else effort
+        if model or effort in ("none", "off") or _NO_EFFORT_MODEL_RE.match(self.model):
+            effort = None
+        self.effort = effort
 
     def complete(self, system, user, *, use_web_search=False, max_web_searches=3,
                  max_tokens=4096, temperature=None, timeout=180, cache_system=True):
