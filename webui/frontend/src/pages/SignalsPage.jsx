@@ -35,6 +35,9 @@ export default function SignalsPage() {
     api.signals().then((d) => { setData(d); setError(null) }).catch((e) => setError(e.message))
   }
   useEffect(() => { load() }, [])
+  // Leaving the page stops a running selected-rows queue after its in-flight call
+  // (otherwise it keeps firing live research/scans with no visible Stop control).
+  useEffect(() => () => { stopSel.current = true }, [])
 
   // Runs the per-domain endpoint over every checked row, sequentially (each call
   // is a live research/scan — no point hammering the server in parallel). Each
@@ -54,7 +57,12 @@ export default function SignalsPage() {
       try {
         const d = await call(domains[i])
         if (d.ok === false) { errors++; lastErr = `${domains[i]}: ${d.error || `${action} failed`}` }
-        else setData(d)
+        else {
+          setData(d)
+          // A failed tech scan still returns ok:true — the failure rides in detected.tech_error.
+          const scanErr = action === 'detect' && !d.detected?.skipped && d.detected?.tech_error
+          if (scanErr) { errors++; lastErr = `${domains[i]}: ${scanErr}` }
+        }
       } catch (e) { errors++; lastErr = `${domains[i]}: ${e.message}` }
       setSelJob((j) => ({ ...j, done: i + 1, errors }))
     }
